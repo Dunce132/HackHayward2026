@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Restaurant AI Chatbot</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="nav-sidebar" aria-label="Account and history">
+        <div class="auth-box">
+          <p class="nav-sidebar-title">Account</p>
+          <button type="button" id="sign-in-google" class="btn-google">
+            Sign in with Google
+          </button>
+          <button type="button" id="sign-out" class="btn-signout hidden">Sign out</button>
+          <p id="auth-user-label" class="auth-user-label"></p>
+          <p id="auth-hint" class="auth-hint">
+            Sign in to save preferences, bookmark restaurants, and get smarter suggestions next time.
+          </p>
+        </div>
+
+        <nav class="side-nav" aria-label="Saved and visited">
+          <button type="button" class="side-tab active" data-tab="saved" id="tab-saved">Saved</button>
+          <button type="button" class="side-tab" data-tab="visited" id="tab-visited">Visited</button>
+        </nav>
+
+        <div id="panel-saved" class="side-panel" role="tabpanel">
+          <p class="panel-heading">Saved for later</p>
+          <ul id="list-saved" class="history-list"></ul>
+          <p id="list-saved-empty" class="history-empty">No saved restaurants yet.</p>
+        </div>
+        <div id="panel-visited" class="side-panel hidden" role="tabpanel">
+          <p class="panel-heading">Previously visited</p>
+          <ul id="list-visited" class="history-list"></ul>
+          <p id="list-visited-empty" class="history-empty">No visits recorded yet.</p>
+        </div>
+      </aside>
+
+      <div class="app-main">
+        <main class="container container--main">
+          <header class="page-header">
+            <div>
+              <h1>Restaurant Decider AI</h1>
+              <p class="subtitle">
+                We ask where you’re eating and dietary needs first, then refine with Perplexity + Google Places.
+              </p>
+            </div>
+            <button type="button" id="reset-chat" class="btn-reset">Reset chat</button>
+          </header>
+
+          <p id="local-time" class="local-time" aria-live="polite"></p>
+
+          <div class="main-layout">
+            <div class="chat-column">
+              <section class="controls">
+                <label for="location">City / Area</label>
+                <input id="location" placeholder="e.g. Hayward, CA" />
+              </section>
+
+              <section id="chat" class="chat"></section>
+
+              <section id="quick-replies-section" class="quick-replies hidden" aria-label="Quick answer choices">
+                <p class="quick-replies-title">Quick answers</p>
+                <div id="quick-replies-list" class="quick-replies-list"></div>
+                <div class="quick-replies-actions">
+                  <button type="button" id="quick-replies-clear" class="quick-replies-btn ghost">Clear checks</button>
+                </div>
+              </section>
+
+              <form id="chat-form" class="chat-form">
+                <input
+                  id="message"
+                  type="text"
+                  placeholder="Type a reply — checked quick answers are included when you send"
+                  autocomplete="off"
+                />
+                <button type="submit">Send</button>
+              </form>
+            </div>
+
+            <aside class="results-panel" aria-label="Restaurant recommendations">
+              <h2 class="results-heading">Top matches</h2>
+              <p class="carousel-hint">Up to 5 picks — #1 is the best match. Arrows wrap around.</p>
+
+              <div id="carousel-empty" class="carousel-empty">
+                Answer a few questions — your top picks will appear here, best match first.
+              </div>
+
+              <div id="carousel-ui" class="carousel-ui hidden">
+                <div class="carousel-wrap">
+                  <button type="button" class="carousel-btn carousel-prev" aria-label="Previous restaurant">
+                    ‹
+                  </button>
+                  <div class="carousel-viewport" id="carousel-viewport" tabindex="0">
+                    <div id="restaurants" class="carousel-track"></div>
+                  </div>
+                  <button type="button" class="carousel-btn carousel-next" aria-label="Next restaurant">
+                    ›
+                  </button>
+                </div>
+                <div id="carousel-dots" class="carousel-dots" role="tablist" aria-label="Slide indicators"></div>
+              </div>
+            </aside>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -87,11 +87,15 @@ def _user_doc_ref(uid: str):
 def get_user_preferences(uid: str) -> Dict[str, Any]:
     if not init_firebase():
         return {}
-    snap = _user_doc_ref(uid).get()
-    if not snap.exists:
+    try:
+        snap = _user_doc_ref(uid).get()
+        if not snap.exists:
+            return {}
+        data = snap.to_dict() or {}
+        return data.get("preferences") or {}
+    except Exception:  # pylint: disable=broad-except
+        # Avoid crashing /api/chat (Flask debug HTML) if Firestore errors when signed in.
         return {}
-    data = snap.to_dict() or {}
-    return data.get("preferences") or {}
 
 
 def merge_and_save_preferences(uid: str, updates: Dict[str, Any]) -> None:

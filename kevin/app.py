@@ -1255,8 +1255,12 @@ def chat():
 
     uid = _optional_uid_from_request()
     if uid:
-        cloud = firebase_store.get_user_preferences(uid)
-        session.preferences = {**cloud, **session.preferences}
+        try:
+            cloud = firebase_store.get_user_preferences(uid)
+            session.preferences = {**cloud, **session.preferences}
+        except Exception:  # pylint: disable=broad-except
+            # Firestore failures must not return Flask HTML debug pages to the client.
+            pass
 
     session.history.append({"role": "user", "content": user_message})
 

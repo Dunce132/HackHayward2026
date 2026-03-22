@@ -40,10 +40,16 @@
           <p class="nav-sidebar-title" data-i18n="groupSession">Group session</p>
           <button type="button" id="btn-create-session" class="btn-secondary" data-i18n="createSession">Create session</button>
           <div class="join-session-row">
-            <input id="session-code-input" type="text" data-i18n="code" data-i18n-attr="placeholder" placeholder="Code" maxlength="6" inputmode="text" />
+            <input id="session-code-input" type="text" data-i18n="code" data-i18n-attr="placeholder" placeholder="Enter 6-character code" maxlength="6" inputmode="text" autocomplete="off" />
             <button type="button" id="btn-join-session" class="btn-secondary" data-i18n="joinSession">Join</button>
           </div>
-          <p id="live-session-code" class="live-session-code hidden"></p>
+          <div id="live-session-code-wrap" class="live-session-code-wrap hidden">
+            <label class="live-session-code-label" data-i18n="shareCode">Share this code</label>
+            <div class="live-session-code-row">
+              <input id="live-session-code" type="text" class="live-session-code-input" readonly />
+              <button type="button" id="btn-copy-session-code" class="btn-copy-code" title="Copy code">📋</button>
+            </div>
+          </div>
           <div id="live-session-lobby" class="live-session-lobby hidden">
             <p class="lobby-members-label" data-i18n="inLobby">In lobby</p>
             <ul id="lobby-members-list" class="lobby-members-list"></ul>

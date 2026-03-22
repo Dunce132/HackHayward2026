@@ -254,6 +254,8 @@ def _format_local_time(tz_id: Optional[str]) -> str:
 
 app = Flask(__name__)
 SESSIONS: Dict[str, ChatSession] = {}
+# In-memory live sessions fallback when Firestore not configured (e.g. local dev)
+LIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
 # Order matters: location and dietary are always asked before the rest.
 STAGES: List[str] = [
     "Location",
@@ -1344,9 +1346,23 @@ def api_create_live_session():
         return jsonify({"error": "Unauthorized"}), 401
     body = request.get_json(force=True) or {}
     code = firebase_store.create_live_session(uid, body)
-    if code:
-        return jsonify({"ok": True, "code": code})
-    return jsonify({"error": "Failed to create session"}), 500
+    if not code:
+        # Fallback: in-memory when Firestore not configured
+        import secrets
+        code = secrets.token_hex(3).upper()
+        display_name = _safe_strip(body.get("display_name", "")) or "Host"
+        LIVE_SESSIONS[code] = {
+            "creatorUid": uid,
+            "members": [{"uid": uid, "displayName": display_name}],
+            "restaurants": body.get("restaurants", []),
+            "votes": {},
+            "chatState": body.get("chatState") or {
+                "history": [], "location": None, "location_range_miles": 10,
+                "stage_index": 0, "readiness_score": 0, "recommendations_started": False,
+                "last_place_ids": [], "last_place_names": [], "preferences": {},
+            },
+        }
+    return jsonify({"ok": True, "code": code})
 
 
 def _enrich_live_session(session: Dict[str, Any]) -> Dict[str, Any]:
@@ -1382,9 +1398,18 @@ def _enrich_live_session(session: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _get_live_session(code: str) -> Optional[Dict[str, Any]]:
+    """Get live session from Firestore or in-memory fallback."""
+    code = code.upper()
+    sess = firebase_store.get_live_session(code)
+    if sess:
+        return sess
+    return LIVE_SESSIONS.get(code)
+
+
 @app.get("/api/live-session/<code>")
 def api_get_live_session(code):
-    session = firebase_store.get_live_session(code)
+    session = _get_live_session(code)
     if not session:
         return jsonify({"error": "Session not found"}), 404
     return jsonify(_enrich_live_session(session))
@@ -1397,7 +1422,15 @@ def api_join_live_session(code):
         return jsonify({"error": "Unauthorized"}), 401
     body = request.get_json(force=True) or {}
     display_name = _safe_strip(body.get("display_name", "")) or "Guest"
+    code = code.upper()
     if firebase_store.join_live_session(code, uid, display_name):
+        return jsonify({"ok": True})
+    if code in LIVE_SESSIONS:
+        members = LIVE_SESSIONS[code].get("members", [])
+        uids = [m.get("uid") if isinstance(m, dict) else m for m in members]
+        if uid not in uids:
+            members.append({"uid": uid, "displayName": display_name})
+            LIVE_SESSIONS[code]["members"] = members
         return jsonify({"ok": True})
     return jsonify({"error": "Session not found"}), 404
 
@@ -1411,7 +1444,11 @@ def api_vote(code):
     place_id = _safe_strip(body.get("place_id", ""))
     if not place_id:
         return jsonify({"error": "place_id required"}), 400
+    code = code.upper()
     if firebase_store.add_session_vote(code, uid, place_id):
+        return jsonify({"ok": True})
+    if code in LIVE_SESSIONS:
+        LIVE_SESSIONS[code].setdefault("votes", {})[uid] = place_id
         return jsonify({"ok": True})
     return jsonify({"error": "Failed to vote"}), 500
 
@@ -1425,7 +1462,11 @@ def api_update_live_restaurants(code):
     restaurants = body.get("restaurants", [])
     if not isinstance(restaurants, list):
         return jsonify({"error": "restaurants array required"}), 400
+    code = code.upper()
     if firebase_store.update_live_session_restaurants(code, restaurants):
+        return jsonify({"ok": True})
+    if code in LIVE_SESSIONS:
+        LIVE_SESSIONS[code]["restaurants"] = restaurants
         return jsonify({"ok": True})
     return jsonify({"error": "Failed to update"}), 500
 
@@ -1452,11 +1493,14 @@ def chat():
 
     use_live = bool(live_session_code)
     if use_live:
-        chat_state = firebase_store.get_live_session_chat_state(live_session_code.upper())
+        code = live_session_code.upper()
+        chat_state = firebase_store.get_live_session_chat_state(code)
+        if not chat_state and code in LIVE_SESSIONS:
+            chat_state = LIVE_SESSIONS[code].get("chatState", {})
         if not chat_state:
             return jsonify({"error": "Live session not found"}), 404
         session = _dict_to_chat_session(chat_state)
-        session_id = live_session_code.upper()
+        session_id = code
     else:
         session_id = get_or_create_session(session_id)
         session = SESSIONS[session_id]
@@ -1605,12 +1649,14 @@ def chat():
         session.history.append({"role": "assistant", "content": reply})
 
         if use_live:
+            code = live_session_code.upper()
             chat_state = _chat_session_to_dict(session)
-            firebase_store.update_live_session_chat_state(live_session_code.upper(), chat_state)
+            if not firebase_store.update_live_session_chat_state(code, chat_state) and code in LIVE_SESSIONS:
+                LIVE_SESSIONS[code]["chatState"] = chat_state
             if response_payload.get("top_options"):
-                firebase_store.update_live_session_restaurants(
-                    live_session_code.upper(), response_payload.get("top_options", [])
-                )
+                if not firebase_store.update_live_session_restaurants(code, response_payload.get("top_options", [])):
+                    if code in LIVE_SESSIONS:
+                        LIVE_SESSIONS[code]["restaurants"] = response_payload.get("top_options", [])
 
         return jsonify(response_payload)
     except requests.RequestException as exc:

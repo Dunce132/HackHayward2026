@@ -70,6 +70,7 @@ const translations = {
     continue: "Continue",
     cancel: "Cancel",
     inLobby: "In lobby",
+    shareCode: "Share this code",
     initialGreeting: "Hi! Where do you want to eat, and any dietary restrictions or allergies? (Or say none.)",
   },
   es: {

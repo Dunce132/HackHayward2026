@@ -37,6 +37,8 @@ const btnCreateSessionEl = document.getElementById("btn-create-session");
 const btnJoinSessionEl = document.getElementById("btn-join-session");
 const sessionCodeInputEl = document.getElementById("session-code-input");
 const liveSessionCodeEl = document.getElementById("live-session-code");
+const liveSessionCodeWrapEl = document.getElementById("live-session-code-wrap");
+const btnCopySessionCodeEl = document.getElementById("btn-copy-session-code");
 const btnLeaveSessionEl = document.getElementById("btn-leave-session");
 
 let sessionId = null;
@@ -1115,10 +1117,8 @@ function leaveLiveSession() {
     clearInterval(liveSessionPollTimer);
     liveSessionPollTimer = null;
   }
-  if (liveSessionCodeEl) {
-    liveSessionCodeEl.classList.add("hidden");
-    liveSessionCodeEl.textContent = "";
-  }
+  if (liveSessionCodeWrapEl) liveSessionCodeWrapEl.classList.add("hidden");
+  if (liveSessionCodeEl) liveSessionCodeEl.value = "";
   updateLobbyMembers([]);
   const lobbyEl = document.getElementById("live-session-lobby");
   if (lobbyEl) lobbyEl.classList.add("hidden");
@@ -1383,10 +1383,8 @@ if (btnCreateSessionEl) {
           liveSessionCode = data.code;
           sessionId = data.code;
           liveSessionLastHistoryLength = chatEl.querySelectorAll(".bubble").length;
-          if (liveSessionCodeEl) {
-            liveSessionCodeEl.textContent = `Session: ${data.code}`;
-            liveSessionCodeEl.classList.remove("hidden");
-          }
+          if (liveSessionCodeEl) liveSessionCodeEl.value = data.code;
+          if (liveSessionCodeWrapEl) liveSessionCodeWrapEl.classList.remove("hidden");
           if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
           addBubble(`Session created! Share code: ${data.code}`, "assistant");
           startLiveSessionPoll();
@@ -1424,10 +1422,8 @@ if (btnJoinSessionEl && sessionCodeInputEl) {
         if (res.ok) {
           liveSessionCode = code;
           sessionId = code;
-          if (liveSessionCodeEl) {
-            liveSessionCodeEl.textContent = `Session: ${code}`;
-            liveSessionCodeEl.classList.remove("hidden");
-          }
+          if (liveSessionCodeEl) liveSessionCodeEl.value = code;
+          if (liveSessionCodeWrapEl) liveSessionCodeWrapEl.classList.remove("hidden");
           if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
           addBubble("Joined session!", "assistant");
           startLiveSessionPoll();
@@ -1459,6 +1455,20 @@ if (btnJoinSessionEl && sessionCodeInputEl) {
 
 if (btnLeaveSessionEl) {
   btnLeaveSessionEl.addEventListener("click", leaveLiveSession);
+}
+
+if (btnCopySessionCodeEl && liveSessionCodeEl) {
+  btnCopySessionCodeEl.addEventListener("click", () => {
+    const code = liveSessionCodeEl.value;
+    if (!code) return;
+    navigator.clipboard?.writeText(code).then(() => {
+      addBubble("Code copied to clipboard.", "assistant");
+    }).catch(() => {
+      liveSessionCodeEl.select();
+      document.execCommand?.("copy");
+      addBubble("Code selected — copy with Ctrl+C.", "assistant");
+    });
+  });
 }
 
 const lobbyModalConfirmEl = document.getElementById("lobby-modal-confirm");

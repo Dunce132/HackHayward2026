@@ -265,24 +265,70 @@ body {
 
 .join-session-row input {
   flex: 1;
-  min-width: 0;
-  padding: 12px 14px;
-  font-size: 16px;
+  min-width: 120px;
+  padding: 14px 16px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
   border-radius: 8px;
   border: 1px solid #e8dfd4;
 }
 
 .join-session-row .btn-secondary {
-  padding: 12px 18px;
-  font-size: 15px;
+  padding: 14px 20px;
+  font-size: 16px;
 }
 
-.live-session-code {
-  font-size: 15px;
+.live-session-code-wrap {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eee8e0;
+}
+
+.live-session-code-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #7a6f62;
+  margin-bottom: 6px;
+}
+
+.live-session-code-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.live-session-code-input {
+  flex: 1;
+  min-width: 0;
+  padding: 14px 16px;
+  font-size: 20px;
   font-weight: 700;
   color: #5a6d4c;
-  margin: 10px 0 6px;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  border: 2px solid #5a6d4c;
+  border-radius: 8px;
+  background: #f8faf6;
+  font-family: monospace;
+}
+
+.btn-copy-code {
+  flex-shrink: 0;
+  width: 52px;
+  padding: 0;
+  font-size: 20px;
+  border: 1px solid #e8dfd4;
+  background: #f0ebe3;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-copy-code:hover {
+  background: #e8dfd4;
 }
 
 .live-session-lobby {

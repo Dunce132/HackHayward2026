@@ -64,6 +64,12 @@ const translations = {
     voteRecorded: "Vote recorded!",
     sessionCreated: "Session created! Share code:",
     joinedSession: "Joined session!",
+    yourName: "Your name",
+    nameForLobby: "Choose a name others will see in the lobby.",
+    namePlaceholder: "e.g. Alex",
+    continue: "Continue",
+    cancel: "Cancel",
+    inLobby: "In lobby",
     initialGreeting: "Hi! Where do you want to eat, and any dietary restrictions or allergies? (Or say none.)",
   },
   es: {

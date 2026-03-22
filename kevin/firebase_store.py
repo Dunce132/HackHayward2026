@@ -264,21 +264,36 @@ def create_live_session(uid: str, session_data: Dict[str, Any]) -> Optional[str]
         import secrets
 
         code = secrets.token_hex(3).upper()  # 6-char code
+        display_name = (session_data.get("display_name") or "").strip() or "Host"
         doc_ref = _sessions_ref().document(code)
         doc_ref.set(
             {
                 "creatorUid": uid,
                 "createdAt": _utc_now_iso(),
-                "members": [uid],
+                "members": [{"uid": uid, "displayName": display_name}],
                 "restaurants": session_data.get("restaurants", []),
                 "votes": {},
                 "status": "active",
+                "chatState": session_data.get("chatState") or _empty_chat_state(),
             },
             merge=True,
         )
         return code
     except Exception:  # pylint: disable=broad-except
         return None
+
+
+def _empty_chat_state() -> Dict[str, Any]:
+    return {
+        "history": [],
+        "location": None,
+        "location_range_miles": 10,
+        "stage_index": 0,
+        "readiness_score": 0,
+        "recommendations_started": False,
+        "last_place_ids": [],
+        "last_place_names": [],
+    }
 
 
 def get_live_session(code: str) -> Optional[Dict[str, Any]]:
@@ -295,7 +310,7 @@ def get_live_session(code: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def join_live_session(code: str, uid: str) -> bool:
+def join_live_session(code: str, uid: str, display_name: str = "Guest") -> bool:
     if not init_firebase():
         return False
     try:
@@ -304,8 +319,9 @@ def join_live_session(code: str, uid: str) -> bool:
         if not snap.exists:
             return False
         members = list((snap.to_dict() or {}).get("members") or [])
-        if uid not in members:
-            members.append(uid)
+        uids = [m.get("uid") if isinstance(m, dict) else m for m in members]
+        if uid not in uids:
+            members.append({"uid": uid, "displayName": (display_name or "").strip() or "Guest"})
             ref.update({"members": members, "updatedAt": _utc_now_iso()})
         return True
     except Exception:  # pylint: disable=broad-except
@@ -334,6 +350,31 @@ def update_live_session_restaurants(code: str, restaurants: List[Dict[str, Any]]
     try:
         _sessions_ref().document(code.upper()).update(
             {"restaurants": restaurants, "updatedAt": _utc_now_iso()}
+        )
+        return True
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
+def get_live_session_chat_state(code: str) -> Optional[Dict[str, Any]]:
+    """Get chat state for a live session."""
+    sess = get_live_session(code)
+    if not sess:
+        return None
+    state = sess.get("chatState") or _empty_chat_state()
+    # Normalize for backward compat
+    if "history" not in state:
+        state["history"] = []
+    return state
+
+
+def update_live_session_chat_state(code: str, chat_state: Dict[str, Any]) -> bool:
+    """Update chat state for a live session."""
+    if not init_firebase():
+        return False
+    try:
+        _sessions_ref().document(code.upper()).update(
+            {"chatState": chat_state, "updatedAt": _utc_now_iso()}
         )
         return True
     except Exception:  # pylint: disable=broad-except

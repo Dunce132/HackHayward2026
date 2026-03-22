@@ -40,10 +40,14 @@
           <p class="nav-sidebar-title" data-i18n="groupSession">Group session</p>
           <button type="button" id="btn-create-session" class="btn-secondary" data-i18n="createSession">Create session</button>
           <div class="join-session-row">
-            <input id="session-code-input" type="text" data-i18n="code" data-i18n-attr="placeholder" placeholder="Code" maxlength="6" />
+            <input id="session-code-input" type="text" data-i18n="code" data-i18n-attr="placeholder" placeholder="Code" maxlength="6" inputmode="text" />
             <button type="button" id="btn-join-session" class="btn-secondary" data-i18n="joinSession">Join</button>
           </div>
           <p id="live-session-code" class="live-session-code hidden"></p>
+          <div id="live-session-lobby" class="live-session-lobby hidden">
+            <p class="lobby-members-label" data-i18n="inLobby">In lobby</p>
+            <ul id="lobby-members-list" class="lobby-members-list"></ul>
+          </div>
           <button type="button" id="btn-leave-session" class="btn-ghost hidden" data-i18n="leaveSession">Leave session</button>
         </div>
 
@@ -63,6 +67,18 @@
           <p id="list-visited-empty" class="history-empty" data-i18n="noVisited">No visits recorded yet.</p>
         </div>
       </aside>
+
+      <div id="lobby-modal" class="modal hidden" role="dialog" aria-label="Enter your name">
+        <div class="modal-content">
+          <h3 data-i18n="yourName">Your name</h3>
+          <p class="modal-desc" data-i18n="nameForLobby">Choose a name others will see in the lobby.</p>
+          <input id="lobby-name-input" type="text" data-i18n="namePlaceholder" data-i18n-attr="placeholder" placeholder="e.g. Alex" maxlength="32" />
+          <div class="lobby-modal-actions">
+            <button type="button" id="lobby-modal-confirm" class="btn-primary" data-i18n="continue">Continue</button>
+            <button type="button" id="lobby-modal-cancel" class="btn-ghost" data-i18n="cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
 
       <div id="profile-modal" class="modal hidden" role="dialog" aria-label="Profile preferences">
         <div class="modal-content">

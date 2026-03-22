@@ -42,6 +42,7 @@ const btnLeaveSessionEl = document.getElementById("btn-leave-session");
 let sessionId = null;
 let liveSessionCode = null;
 let liveSessionPollTimer = null;
+let liveSessionLastHistoryLength = 0;
 let firebaseAuth = null;
 /** True when server has Firebase Admin + Firestore (can verify tokens and save). */
 let serverFirestoreEnabled = false;
@@ -49,6 +50,7 @@ let userCoords = null;
 /** After user picks a restaurant, chat input is disabled until Reset. */
 let chatEnded = false;
 let lastRestaurantList = [];
+let lastVotesWithDetails = [];
 let selectedPlaceId = null;
 
 function getClientTimezone() {
@@ -523,6 +525,7 @@ async function sendChatMessage(message) {
       headers: await authHeaders(),
       body: JSON.stringify({
         session_id: sessionId,
+        live_session_code: liveSessionCode || undefined,
         message: trimmed,
         location: locationEl.value.trim(),
         user_lat: userCoords ? userCoords.lat : null,
@@ -540,6 +543,7 @@ async function sendChatMessage(message) {
 
     sessionId = data.session_id;
     addBubble(data.reply, "assistant");
+    if (liveSessionCode) liveSessionLastHistoryLength = chatEl.querySelectorAll(".bubble").length;
     updateLocalTimeDisplay(data.local_time_display || "");
     if (locationRangeEl && data.location_range_miles) {
       locationRangeEl.value = String(data.location_range_miles);
@@ -709,8 +713,9 @@ function wireInnerCarousel(viewport) {
   if (next) next.addEventListener("click", () => go(1));
 }
 
-function renderRestaurants(restaurants) {
+function renderRestaurants(restaurants, votesWithDetails) {
   lastRestaurantList = Array.isArray(restaurants) ? restaurants : [];
+  if (Array.isArray(votesWithDetails)) lastVotesWithDetails = votesWithDetails;
   restaurantsEl.innerHTML = "";
   const sorted = sortByBestMatchFirst(lastRestaurantList);
 
@@ -915,6 +920,22 @@ function renderRestaurants(restaurants) {
 
     card.appendChild(actionsRow);
 
+    if (liveSessionCode && pid) {
+      const votesForThis = lastVotesWithDetails.filter((v) => v.place_id === pid);
+      if (votesForThis.length) {
+        const badgeWrap = document.createElement("div");
+        badgeWrap.className = "vote-badges";
+        votesForThis.forEach((v) => {
+          const badge = document.createElement("span");
+          badge.className = "vote-badge";
+          const matchStr = v.match_score != null ? ` ${v.match_score}%` : "";
+          badge.textContent = `${v.displayName || "?"} voted${matchStr}`;
+          badgeWrap.appendChild(badge);
+        });
+        card.appendChild(badgeWrap);
+      }
+    }
+
     restaurantsEl.appendChild(card);
   });
 
@@ -1089,6 +1110,7 @@ async function updateLiveSessionRestaurants() {
 
 function leaveLiveSession() {
   liveSessionCode = null;
+  liveSessionLastHistoryLength = 0;
   if (liveSessionPollTimer) {
     clearInterval(liveSessionPollTimer);
     liveSessionPollTimer = null;
@@ -1097,7 +1119,37 @@ function leaveLiveSession() {
     liveSessionCodeEl.classList.add("hidden");
     liveSessionCodeEl.textContent = "";
   }
+  updateLobbyMembers([]);
+  const lobbyEl = document.getElementById("live-session-lobby");
+  if (lobbyEl) lobbyEl.classList.add("hidden");
   if (btnLeaveSessionEl) btnLeaveSessionEl.classList.add("hidden");
+}
+
+function syncChatFromLiveSession(history) {
+  if (!Array.isArray(history) || history.length <= liveSessionLastHistoryLength) return;
+  const bubbles = chatEl.querySelectorAll(".bubble");
+  for (let i = bubbles.length; i < history.length; i++) {
+    const msg = history[i];
+    if (msg && msg.role && msg.content) addBubble(msg.content, msg.role);
+  }
+  liveSessionLastHistoryLength = history.length;
+}
+
+function updateLobbyMembers(members) {
+  const listEl = document.getElementById("lobby-members-list");
+  const lobbyEl = document.getElementById("live-session-lobby");
+  if (!listEl || !lobbyEl) return;
+  if (!members || !members.length) {
+    lobbyEl.classList.add("hidden");
+    return;
+  }
+  lobbyEl.classList.remove("hidden");
+  listEl.innerHTML = "";
+  members.forEach((m) => {
+    const li = document.createElement("li");
+    li.textContent = typeof m === "object" ? (m.displayName || m.uid || "?") : m;
+    listEl.appendChild(li);
+  });
 }
 
 function startLiveSessionPoll() {
@@ -1108,44 +1160,72 @@ function startLiveSessionPoll() {
       const res = await fetch(`/api/live-session/${liveSessionCode}`);
       if (!res.ok) return;
       const data = await res.json();
-      if (data.restaurants?.length && !lastRestaurantList.length) {
-        renderRestaurants(data.restaurants);
+      if (data.chatState?.history) syncChatFromLiveSession(data.chatState.history);
+      if (data.members) updateLobbyMembers(data.members);
+      if (data.restaurants?.length) {
+        const hadNone = !lastRestaurantList.length;
+        renderRestaurants(data.restaurants, data.votesWithDetails);
+        if (hadNone && data.restaurants.length) lastRestaurantList = data.restaurants;
       }
     } catch {
       /* ignore */
     }
-  }, 3000);
+  }, 2500);
 }
 
 if (btnMicEl) {
   let recognition = null;
+  let committedTranscript = "";
+  let interimTranscript = "";
+
   if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     try {
       recognition = new SR();
-      recognition.continuous = false;
-      recognition.interimResults = false;
+      recognition.continuous = true;
+      recognition.interimResults = true;
       recognition.lang = "en-US";
       recognition.maxAlternatives = 3;
+
       recognition.onresult = (e) => {
-        const result = e.results[e.results.length - 1];
-        if (!result.isFinal || !messageEl) return;
-        const t = result[0].transcript.trim();
-        if (t) messageEl.value = messageEl.value ? `${messageEl.value} ${t}`.trim() : t;
+        if (!messageEl) return;
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const result = e.results[i];
+          const transcript = result[0]?.transcript?.trim() || "";
+          if (!transcript) continue;
+          if (result.isFinal) {
+            committedTranscript = committedTranscript ? `${committedTranscript} ${transcript}` : transcript;
+            interimTranscript = "";
+          } else {
+            interimTranscript = transcript;
+          }
+        }
+        const full = committedTranscript + (interimTranscript ? ` ${interimTranscript}` : "");
+        messageEl.value = full.trim();
+        messageEl.dispatchEvent(new Event("input", { bubbles: true }));
       };
+
       recognition.onend = () => btnMicEl.classList.remove("recording");
+
       recognition.onerror = (e) => {
         btnMicEl.classList.remove("recording");
-        if (e.error === "not-allowed") {
+        if (e.error === "not-allowed" || e.error === "service-not-allowed") {
           addBubble("Microphone access was denied. Check your browser permissions.", "assistant");
         } else if (e.error === "no-speech") {
           addBubble("No speech detected. Try again?", "assistant");
+        } else if (e.error !== "aborted") {
+          addBubble("Voice input error. Try Chrome or Edge if it keeps failing.", "assistant");
         }
+      };
+
+      recognition.onspeechstart = () => {
+        committedTranscript = messageEl ? messageEl.value : "";
       };
     } catch (err) {
       recognition = null;
     }
   }
+
   btnMicEl.addEventListener("click", async () => {
     if (!recognition) {
       addBubble("Voice input isn't supported in this browser. Try Chrome or Edge.", "assistant");
@@ -1153,33 +1233,36 @@ if (btnMicEl) {
     }
     if (btnMicEl.classList.contains("recording")) {
       try { recognition.stop(); } catch (_) {}
-      btnMicEl.classList.remove("recording");
       return;
     }
     try {
       recognition.abort && recognition.abort();
     } catch (_) {}
+    committedTranscript = messageEl ? messageEl.value : "";
+    interimTranscript = "";
     btnMicEl.classList.add("recording");
     try {
-      // Explicitly request mic permission first — ensures browser shows the permission prompt
-      // (Web Speech API's internal getUserMedia doesn't always trigger it reliably)
       if (navigator.mediaDevices?.getUserMedia) {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          stream.getTracks().forEach((t) => t.stop());
-        } catch (mediaErr) {
-          if (mediaErr.name === "NotAllowedError" || mediaErr.name === "PermissionDeniedError") {
-            btnMicEl.classList.remove("recording");
-            addBubble("Microphone access was denied. Check your browser permissions.", "assistant");
-            return;
-          }
-          // Other errors (e.g. NotFoundError) — still try recognition.start() as fallback
-        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        });
+        stream.getTracks().forEach((t) => t.stop());
       }
+    } catch (mediaErr) {
+      if (mediaErr.name === "NotAllowedError" || mediaErr.name === "PermissionDeniedError") {
+        btnMicEl.classList.remove("recording");
+        addBubble("Microphone access was denied. Check your browser permissions.", "assistant");
+        return;
+      }
+    }
+    try {
       recognition.start();
     } catch (err) {
       btnMicEl.classList.remove("recording");
-      if (err.error === "not-allowed" || err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+      if (err.name === "NotAllowedError" || err.name === "InvalidStateError") {
         addBubble("Microphone access was denied. Check your browser permissions.", "assistant");
       } else {
         addBubble("Couldn't start voice input. Try again.", "assistant");
@@ -1244,32 +1327,79 @@ if (btnSavePreferencesEl) {
   });
 }
 
+let _lobbyModalPending = null;
+function showLobbyModal(onConfirm) {
+  const modal = document.getElementById("lobby-modal");
+  const input = document.getElementById("lobby-name-input");
+  const confirmBtn = document.getElementById("lobby-modal-confirm");
+  const cancelBtn = document.getElementById("lobby-modal-cancel");
+  if (!modal || !input || !confirmBtn || !cancelBtn) return;
+  _lobbyModalPending = onConfirm;
+  input.value = firebaseAuth?.currentUser?.displayName?.split(" ")[0] || "";
+  modal.classList.remove("hidden");
+  input.focus();
+}
+function hideLobbyModal() {
+  const modal = document.getElementById("lobby-modal");
+  if (modal) modal.classList.add("hidden");
+  _lobbyModalPending = null;
+}
+
 if (btnCreateSessionEl) {
   btnCreateSessionEl.addEventListener("click", async () => {
     if (!firebaseAuth?.currentUser) {
       addBubble("Sign in to create a group session.", "assistant");
       return;
     }
-    try {
-      const res = await fetch("/api/live-session", {
-        method: "POST",
-        headers: await authHeaders(),
-        body: JSON.stringify({ restaurants: lastRestaurantList }),
-      });
-      const data = await res.json();
-      if (data.code) {
-        liveSessionCode = data.code;
-        if (liveSessionCodeEl) {
-          liveSessionCodeEl.textContent = `Session: ${data.code}`;
-          liveSessionCodeEl.classList.remove("hidden");
+    showLobbyModal(async (displayName) => {
+      try {
+        const initialHistory = [];
+        chatEl.querySelectorAll(".bubble").forEach((b) => {
+          const role = b.classList.contains("user") ? "user" : "assistant";
+          const text = b.querySelector("span")?.textContent?.trim();
+          if (text) initialHistory.push({ role, content: text });
+        });
+        const res = await fetch("/api/live-session", {
+          method: "POST",
+          headers: await authHeaders(),
+          body: JSON.stringify({
+            restaurants: lastRestaurantList,
+            display_name: displayName,
+            chatState: {
+              history: initialHistory,
+              location: locationEl?.value?.trim() || null,
+              location_range_miles: locationRangeEl ? parseInt(locationRangeEl.value, 10) : 10,
+              stage_index: 0,
+              readiness_score: 0,
+              recommendations_started: false,
+              last_place_ids: [],
+              last_place_names: [],
+              preferences: {},
+            },
+          }),
+        });
+        const data = await res.json();
+        if (data.code) {
+          liveSessionCode = data.code;
+          sessionId = data.code;
+          liveSessionLastHistoryLength = chatEl.querySelectorAll(".bubble").length;
+          if (liveSessionCodeEl) {
+            liveSessionCodeEl.textContent = `Session: ${data.code}`;
+            liveSessionCodeEl.classList.remove("hidden");
+          }
+          if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
+          addBubble(`Session created! Share code: ${data.code}`, "assistant");
+          startLiveSessionPoll();
+          const sessRes = await fetch(`/api/live-session/${data.code}`);
+          if (sessRes.ok) {
+            const sess = await sessRes.json();
+            if (sess.members) updateLobbyMembers(sess.members);
+          }
         }
-        if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
-        addBubble(`Session created! Share code: ${data.code}`, "assistant");
-        startLiveSessionPoll();
+      } catch (e) {
+        addBubble(`Create failed: ${e.message}`, "assistant");
       }
-    } catch (e) {
-      addBubble(`Create failed: ${e.message}`, "assistant");
-    }
+    });
   });
 }
 
@@ -1284,36 +1414,65 @@ if (btnJoinSessionEl && sessionCodeInputEl) {
       addBubble("Sign in to join a session.", "assistant");
       return;
     }
-    try {
-      const res = await fetch(`/api/live-session/${code}/join`, {
-        method: "POST",
-        headers: await authHeaders(),
-      });
-      if (res.ok) {
-        liveSessionCode = code;
-        if (liveSessionCodeEl) {
-          liveSessionCodeEl.textContent = `Session: ${code}`;
-          liveSessionCodeEl.classList.remove("hidden");
+    showLobbyModal(async (displayName) => {
+      try {
+        const res = await fetch(`/api/live-session/${code}/join`, {
+          method: "POST",
+          headers: await authHeaders(),
+          body: JSON.stringify({ display_name: displayName }),
+        });
+        if (res.ok) {
+          liveSessionCode = code;
+          sessionId = code;
+          if (liveSessionCodeEl) {
+            liveSessionCodeEl.textContent = `Session: ${code}`;
+            liveSessionCodeEl.classList.remove("hidden");
+          }
+          if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
+          addBubble("Joined session!", "assistant");
+          startLiveSessionPoll();
+          const sessRes = await fetch(`/api/live-session/${code}`);
+          if (sessRes.ok) {
+            const sess = await sessRes.json();
+            if (sess.restaurants?.length) {
+              renderRestaurants(sess.restaurants);
+              lastRestaurantList = sess.restaurants;
+            }
+            if (sess.members) updateLobbyMembers(sess.members);
+            if (sess.chatState?.history?.length) {
+              chatEl.innerHTML = "";
+              sess.chatState.history.forEach((msg) => addBubble(msg.content, msg.role));
+              liveSessionLastHistoryLength = sess.chatState.history.length;
+            } else {
+              liveSessionLastHistoryLength = chatEl.querySelectorAll(".bubble").length;
+            }
+          }
+        } else {
+          addBubble("Session not found.", "assistant");
         }
-        if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
-        addBubble("Joined session!", "assistant");
-        startLiveSessionPoll();
-        const sessRes = await fetch(`/api/live-session/${code}`);
-        if (sessRes.ok) {
-          const sess = await sessRes.json();
-          if (sess.restaurants?.length) renderRestaurants(sess.restaurants);
-        }
-      } else {
-        addBubble("Session not found.", "assistant");
+      } catch (e) {
+        addBubble(`Join failed: ${e.message}`, "assistant");
       }
-    } catch (e) {
-      addBubble(`Join failed: ${e.message}`, "assistant");
-    }
+    });
   });
 }
 
 if (btnLeaveSessionEl) {
   btnLeaveSessionEl.addEventListener("click", leaveLiveSession);
+}
+
+const lobbyModalConfirmEl = document.getElementById("lobby-modal-confirm");
+const lobbyModalCancelEl = document.getElementById("lobby-modal-cancel");
+const lobbyNameInputEl = document.getElementById("lobby-name-input");
+if (lobbyModalConfirmEl && lobbyModalCancelEl && lobbyNameInputEl) {
+  lobbyModalConfirmEl.addEventListener("click", () => {
+    if (typeof _lobbyModalPending === "function") {
+      const name = lobbyNameInputEl.value.trim() || "Guest";
+      hideLobbyModal();
+      _lobbyModalPending(name);
+    }
+  });
+  lobbyModalCancelEl.addEventListener("click", hideLobbyModal);
 }
 
 initFirebaseClient();

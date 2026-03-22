@@ -258,21 +258,99 @@ body {
 
 .join-session-row {
   display: flex;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: stretch;
 }
 
 .join-session-row input {
   flex: 1;
-  padding: 8px 10px;
-  font-size: 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  font-size: 16px;
+  border-radius: 8px;
+  border: 1px solid #e8dfd4;
+}
+
+.join-session-row .btn-secondary {
+  padding: 12px 18px;
+  font-size: 15px;
 }
 
 .live-session-code {
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 700;
   color: #5a6d4c;
-  margin: 8px 0 4px;
+  margin: 10px 0 6px;
+  letter-spacing: 0.05em;
+}
+
+.live-session-lobby {
+  margin-top: 10px;
+  padding: 10px 0;
+  border-top: 1px solid #eee8e0;
+}
+
+.lobby-members-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #7a6f62;
+  margin: 0 0 6px;
+}
+
+.lobby-members-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 14px;
+}
+
+.lobby-members-list li {
+  padding: 4px 0;
+  color: #5a4a3a;
+}
+
+.lobby-modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.lobby-modal-actions .btn-primary,
+.lobby-modal-actions .btn-ghost {
+  flex: 1;
+}
+
+#lobby-name-input {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 16px;
+  border-radius: 8px;
+  border: 1px solid #e8dfd4;
+  margin-top: 8px;
+  box-sizing: border-box;
+}
+
+.vote-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.vote-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: #e8f0e4;
+  color: #5a6d4c;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.vote-badge .match-pct {
+  font-weight: 700;
 }
 
 .controls-row {

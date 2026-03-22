@@ -445,6 +445,36 @@ def fetch_place_menu_insights(place_id: str) -> str:
     return "\n".join(parts)
 
 
+def _chat_session_to_dict(session: ChatSession) -> Dict[str, Any]:
+    """Serialize ChatSession for Firestore."""
+    return {
+        "history": list(session.history),
+        "location": session.location,
+        "location_range_miles": session.location_range_miles,
+        "stage_index": session.stage_index,
+        "readiness_score": session.readiness_score,
+        "recommendations_started": session.recommendations_started,
+        "last_place_ids": list(session.last_place_ids),
+        "last_place_names": list(session.last_place_names),
+        "preferences": dict(session.preferences),
+    }
+
+
+def _dict_to_chat_session(d: Dict[str, Any]) -> ChatSession:
+    """Deserialize ChatSession from Firestore."""
+    s = ChatSession()
+    s.history = list(d.get("history") or [])
+    s.location = d.get("location")
+    s.location_range_miles = d.get("location_range_miles") or 10
+    s.stage_index = int(d.get("stage_index") or 0)
+    s.readiness_score = int(d.get("readiness_score") or 0)
+    s.recommendations_started = bool(d.get("recommendations_started"))
+    s.last_place_ids = list(d.get("last_place_ids") or [])
+    s.last_place_names = list(d.get("last_place_names") or [])
+    s.preferences = dict(d.get("preferences") or {})
+    return s
+
+
 def get_or_create_session(session_id: Optional[str]) -> str:
     if session_id and session_id in SESSIONS:
         return session_id
@@ -1319,12 +1349,45 @@ def api_create_live_session():
     return jsonify({"error": "Failed to create session"}), 500
 
 
+def _enrich_live_session(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Add votesWithDetails (name, match%) for display."""
+    members = session.get("members") or []
+    uid_to_name = {}
+    for m in members:
+        if isinstance(m, dict):
+            uid_to_name[m.get("uid", "")] = m.get("displayName", "?")
+        else:
+            uid_to_name[str(m)] = "Guest"
+    votes = session.get("votes") or {}
+    restaurants = {r.get("place_id"): r for r in (session.get("restaurants") or []) if r.get("place_id")}
+    votes_with_details = []
+    for uid, place_id in votes.items():
+        r = restaurants.get(place_id, {})
+        match_pct = r.get("match_score")
+        if match_pct is not None:
+            try:
+                match_pct = int(float(match_pct))
+            except (TypeError, ValueError):
+                match_pct = None
+        votes_with_details.append({
+            "uid": uid,
+            "displayName": uid_to_name.get(uid, "?"),
+            "place_id": place_id,
+            "place_name": r.get("name"),
+            "match_score": match_pct,
+        })
+    out = dict(session)
+    out["votesWithDetails"] = votes_with_details
+    out["members"] = [m if isinstance(m, dict) else {"uid": m, "displayName": uid_to_name.get(str(m), "Guest")} for m in members]
+    return out
+
+
 @app.get("/api/live-session/<code>")
 def api_get_live_session(code):
     session = firebase_store.get_live_session(code)
     if not session:
         return jsonify({"error": "Session not found"}), 404
-    return jsonify(session)
+    return jsonify(_enrich_live_session(session))
 
 
 @app.post("/api/live-session/<code>/join")
@@ -1332,7 +1395,9 @@ def api_join_live_session(code):
     uid = _optional_uid_from_request()
     if not uid:
         return jsonify({"error": "Unauthorized"}), 401
-    if firebase_store.join_live_session(code, uid):
+    body = request.get_json(force=True) or {}
+    display_name = _safe_strip(body.get("display_name", "")) or "Guest"
+    if firebase_store.join_live_session(code, uid, display_name):
         return jsonify({"ok": True})
     return jsonify({"error": "Session not found"}), 404
 
@@ -1375,6 +1440,7 @@ def chat():
     payload = request.get_json(force=True)
     user_message = (payload.get("message") or "").strip()
     session_id = payload.get("session_id")
+    live_session_code = _safe_strip(payload.get("live_session_code", ""))
     location = (payload.get("location") or "").strip()
     user_lat = payload.get("user_lat")
     user_lng = payload.get("user_lng")
@@ -1384,8 +1450,16 @@ def chat():
     if not user_message:
         return jsonify({"error": "message is required"}), 400
 
-    session_id = get_or_create_session(session_id)
-    session = SESSIONS[session_id]
+    use_live = bool(live_session_code)
+    if use_live:
+        chat_state = firebase_store.get_live_session_chat_state(live_session_code.upper())
+        if not chat_state:
+            return jsonify({"error": "Live session not found"}), 404
+        session = _dict_to_chat_session(chat_state)
+        session_id = live_session_code.upper()
+    else:
+        session_id = get_or_create_session(session_id)
+        session = SESSIONS[session_id]
 
     old_loc = session.location
     old_ulat, old_ulng = session.user_lat, session.user_lng
@@ -1529,6 +1603,15 @@ def chat():
         )
 
         session.history.append({"role": "assistant", "content": reply})
+
+        if use_live:
+            chat_state = _chat_session_to_dict(session)
+            firebase_store.update_live_session_chat_state(live_session_code.upper(), chat_state)
+            if response_payload.get("top_options"):
+                firebase_store.update_live_session_restaurants(
+                    live_session_code.upper(), response_payload.get("top_options", [])
+                )
+
         return jsonify(response_payload)
     except requests.RequestException as exc:
         return jsonify({"error": f"External API request failed: {exc}"}), 502

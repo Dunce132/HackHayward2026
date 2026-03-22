@@ -1146,7 +1146,7 @@ if (btnMicEl) {
       recognition = null;
     }
   }
-  btnMicEl.addEventListener("click", () => {
+  btnMicEl.addEventListener("click", async () => {
     if (!recognition) {
       addBubble("Voice input isn't supported in this browser. Try Chrome or Edge.", "assistant");
       return;
@@ -1161,10 +1161,29 @@ if (btnMicEl) {
     } catch (_) {}
     btnMicEl.classList.add("recording");
     try {
+      // Explicitly request mic permission first — ensures browser shows the permission prompt
+      // (Web Speech API's internal getUserMedia doesn't always trigger it reliably)
+      if (navigator.mediaDevices?.getUserMedia) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach((t) => t.stop());
+        } catch (mediaErr) {
+          if (mediaErr.name === "NotAllowedError" || mediaErr.name === "PermissionDeniedError") {
+            btnMicEl.classList.remove("recording");
+            addBubble("Microphone access was denied. Check your browser permissions.", "assistant");
+            return;
+          }
+          // Other errors (e.g. NotFoundError) — still try recognition.start() as fallback
+        }
+      }
       recognition.start();
     } catch (err) {
       btnMicEl.classList.remove("recording");
-      addBubble("Couldn't start voice input. Try again.", "assistant");
+      if (err.error === "not-allowed" || err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        addBubble("Microphone access was denied. Check your browser permissions.", "assistant");
+      } else {
+        addBubble("Couldn't start voice input. Try again.", "assistant");
+      }
     }
   });
 }

@@ -59,6 +59,37 @@ async function authHeaders() {
   return h;
 }
 
+/**
+ * Parse JSON from a fetch Response. Clear error when server returns HTML (404/502/error pages).
+ */
+async function readJsonFromResponse(res) {
+  const text = await res.text();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error(`Empty response from server (HTTP ${res.status}).`);
+  }
+  if (trimmed.startsWith("<") || trimmed.startsWith("<!")) {
+    const st = res.status;
+    let msg = "The app expected JSON but the server returned a web page. ";
+    if (st === 404) {
+      msg +=
+        "404 — API not found. Open the app via your Cloud Run HTTPS URL (not file://). If you use a static host, the Flask API is not there.";
+    } else if (st >= 500) {
+      msg += `Server error ${st} — check Cloud Run logs for crashes.`;
+    } else if (st === 502 || st === 503) {
+      msg += `${st} — service busy or cold starting; retry in a few seconds.`;
+    } else {
+      msg += `HTTP ${st}.`;
+    }
+    throw new Error(msg);
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    throw new Error(`Invalid JSON (HTTP ${res.status}): ${trimmed.slice(0, 80)}…`);
+  }
+}
+
 function formatRecordDate(iso) {
   if (!iso) return "";
   try {
@@ -180,7 +211,7 @@ function updateBackendSyncHint() {
 async function initFirebaseClient() {
   try {
     const res = await fetch("/api/config");
-    const cfg = await res.json();
+    const cfg = await readJsonFromResponse(res);
     serverFirestoreEnabled = Boolean(cfg.firestore_enabled);
     const fb = cfg.firebase;
     if (!firebaseConfigReady(fb)) {
@@ -394,7 +425,7 @@ async function sendChatMessage(message) {
       }),
     });
 
-    const data = await response.json();
+    const data = await readJsonFromResponse(response);
     if (!response.ok) {
       addBubble(`Error: ${data.error || "Unknown error"}`, "assistant");
       return;

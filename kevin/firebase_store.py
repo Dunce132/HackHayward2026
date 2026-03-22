@@ -4,6 +4,7 @@ Set GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_CREDENTIALS_JSON (path or inline 
 """
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -32,7 +33,9 @@ def init_firebase() -> bool:
         return True
 
     cred = None
-    raw = os.getenv("FIREBASE_CREDENTIALS_JSON", "").strip()
+    raw = (os.getenv("FIREBASE_CREDENTIALS_JSON") or "").strip()
+    if raw.startswith("\ufeff"):
+        raw = raw.lstrip("\ufeff")
     path = (
         os.getenv("FIREBASE_CREDENTIALS_PATH", "").strip()
         or os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
@@ -49,7 +52,14 @@ def init_firebase() -> bool:
         _db = firestore.client()
         _firebase_ready = True
         return True
-    except (ValueError, OSError, TypeError, json.JSONDecodeError):
+    except (ValueError, OSError, TypeError, json.JSONDecodeError) as exc:
+        if raw or path:
+            print(
+                "firebase_store.init_firebase: failed (check FIREBASE_CREDENTIALS_JSON / path):",
+                type(exc).__name__,
+                str(exc)[:200],
+                file=sys.stderr,
+            )
         return False
 
 

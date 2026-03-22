@@ -579,9 +579,7 @@ def ask_perplexity_for_next_step(
         "Readiness: set readiness_score >= recommendation_threshold and should_search true once you have "
         "a clear location (or area) AND dietary/allergy info (or explicit no restrictions), "
         "so results can appear; keep refining with follow-ups.\n"
-        "suggested_restaurant_names: When you recommend or mention specific restaurant names in your reply, always list them here as an array "
-        "(e.g. [\"Joe's Pizza\", \"Mama's Kitchen\"]). This surfaces them in the match section. Use [] only when you don't name specific places.\n"
-        "Return ONLY JSON: reply, stage_index, preferences_updates, readiness_score, should_search, search_query, quick_replies, suggested_restaurant_names."
+        "Return ONLY JSON: reply, stage_index, preferences_updates, readiness_score, should_search, search_query, quick_replies."
     )
 
     user_turn = sum(1 for m in session.history if m.get("role") == "user")
@@ -643,11 +641,6 @@ def ask_perplexity_for_next_step(
     parsed.setdefault("search_query", "")
     parsed.setdefault("quick_replies", [])
     parsed["quick_replies"] = _sanitize_quick_replies(parsed.get("quick_replies"))
-    suggested = parsed.get("suggested_restaurant_names")
-    if isinstance(suggested, list):
-        parsed["suggested_restaurant_names"] = [_safe_strip(x) for x in suggested if _safe_strip(x)][:5]
-    else:
-        parsed["suggested_restaurant_names"] = []
     return parsed
 
 
@@ -665,15 +658,15 @@ def rank_restaurants_with_perplexity(
     system_prompt = (
         "You rank restaurants from user preferences and Google Places data. Return ONLY JSON: {\"top_options\": [ ... ]}. "
         "Each option: place_id, name, match_score, why_fit, dish_highlight — copied from the provided list only; never invent names.\n"
-        "CRITICAL: The user's stated cuisine and dietary preferences are NON-NEGOTIABLE. "
-        "If they said Thai, Vietnamese, Italian, etc., EXCLUDE any restaurant that does not match that cuisine. "
-        "If they have dietary restrictions (vegan, halal, gluten-free, etc.), EXCLUDE places that cannot accommodate them. "
-        "Only include restaurants that clearly match the requested cuisine/type AND dietary needs. "
-        "match_score: 0–100. Give 0 or omit restaurants that don't match cuisine or diet. "
-        f"Pick up to {TOP_N_RESTAURANTS} unique place_id values from the provided list that meet these criteria.\n"
-        "Priority order: (1) cuisine/type match, (2) dietary match, (3) location, (4) meal context, (5) budget, (6) hours.\n"
-        "why_fit: ONE short sentence explaining the match. No generic praise.\n"
-        "dish_highlight: ONE must-try dish from reviews/overview. Max 50 chars. Empty string if none."
+        "match_score: 0–100 (fit for this user). "
+        f"Pick up to {TOP_N_RESTAURANTS} unique place_id values when possible.\n"
+        "Prioritize places in or near the user's location string (match formatted_address to the area). "
+        "If account_profile is present, apply merged_preferences_from_account_and_chat and favor variety vs recent lists. "
+        "Then dietary needs and allergies, then meal context, distance, hours, budget, cuisine.\n"
+        "why_fit: ONE short sentence (max ~120 characters). Explain only why it matches THEIR stated wants—"
+        "diet, vibe, budget, distance, or timing. Skip generic praise. No bullets or markdown.\n"
+        "dish_highlight: ONE must-try dish or signature item inferred from editorial_overview or review_excerpts. "
+        "Max 50 chars. Use empty string if no clear dish mentioned."
     )
 
     rank_payload: Dict[str, Any] = {
@@ -986,39 +979,6 @@ def search_restaurants(
     travel_lng = user_lng if user_lng is not None else origin_lng
     enrich_travel_times(restaurants, travel_lat, travel_lng)
     return restaurants
-
-
-def search_restaurants_by_names(
-    names: List[str],
-    location: Optional[str],
-    user_lat: Optional[float],
-    user_lng: Optional[float],
-) -> List[Dict[str, Any]]:
-    """Search for specific restaurant names; returns matches in same format as search_restaurants."""
-    if not names or not GOOGLE_PLACES_API_KEY:
-        return []
-    location_part = _safe_strip(location)
-    found: List[Dict[str, Any]] = []
-    seen_ids: set = set()
-    for name in names[:5]:  # limit to avoid rate limits
-        name_clean = _safe_strip(name)
-        if len(name_clean) < 2:
-            continue
-        query = f"{name_clean} restaurant"
-        if location_part:
-            query = f"{name_clean} in {location_part}"
-        results = search_restaurants(query, location, user_lat, user_lng)
-        for r in results:
-            pid = r.get("place_id")
-            if pid and pid not in seen_ids:
-                r_copy = dict(r)
-                r_copy["match_score"] = 95  # suggested matches rank high
-                r_copy.setdefault("why_fit", "Suggested in chat")
-                r_copy.setdefault("dish_highlight", "")
-                found.append(r_copy)
-                seen_ids.add(pid)
-                break  # take first match per name
-    return found
 
 
 @app.get("/api/place-photo")
@@ -1550,42 +1510,13 @@ def chat():
             )
             response_payload["restaurants"] = restaurants
             rank_profile = _account_profile_for_ai(uid, session) if uid else None
-            tops = rank_restaurants_with_perplexity(
+            response_payload["top_options"] = rank_restaurants_with_perplexity(
                 session, restaurants, rank_profile
             )
-            suggested_names = ai_step.get("suggested_restaurant_names") or []
-            if suggested_names and session.location:
-                suggested_places = search_restaurants_by_names(
-                    suggested_names,
-                    session.location,
-                    session.user_lat,
-                    session.user_lng,
-                )
-                seen_pids = {t.get("place_id") for t in tops if t.get("place_id")}
-                for s in suggested_places:
-                    pid = s.get("place_id")
-                    if pid and pid not in seen_pids:
-                        tops.insert(0, s)
-                        seen_pids.add(pid)
-            response_payload["top_options"] = tops[:TOP_N_RESTAURANTS]
             response_payload["action"] = "recommendations_updated"
-            session.last_place_ids = [t.get("place_id") for t in tops[:TOP_N_RESTAURANTS] if t.get("place_id")]
-            session.last_place_names = [t.get("name") for t in tops[:TOP_N_RESTAURANTS] if t.get("name")]
-        else:
-            suggested_names = ai_step.get("suggested_restaurant_names") or []
-            if suggested_names and session.location:
-                suggested_places = search_restaurants_by_names(
-                    suggested_names,
-                    session.location,
-                    session.user_lat,
-                    session.user_lng,
-                )
-                if suggested_places:
-                    response_payload["top_options"] = suggested_places[:TOP_N_RESTAURANTS]
-                    response_payload["restaurants"] = suggested_places
-                    response_payload["action"] = "recommendations_updated"
-                    session.last_place_ids = [t.get("place_id") for t in suggested_places if t.get("place_id")]
-                    session.last_place_names = [t.get("name") for t in suggested_places if t.get("name")]
+            tops = response_payload.get("top_options") or []
+            session.last_place_ids = [t.get("place_id") for t in tops if t.get("place_id")]
+            session.last_place_names = [t.get("name") for t in tops if t.get("name")]
 
         results_in_response = bool(response_payload.get("top_options")) or bool(
             response_payload.get("restaurants")

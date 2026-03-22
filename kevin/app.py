@@ -1118,18 +1118,29 @@ def _restaurant_record_from_body(body: Any) -> Dict[str, Any]:
     }
 
 
+def _firebase_web_config() -> Dict[str, str]:
+    """Build Firebase client config; authDomain defaults to PROJECT_ID.firebaseapp.com."""
+    api_key = (os.getenv("FIREBASE_WEB_API_KEY") or "").strip()
+    project_id = (os.getenv("FIREBASE_PROJECT_ID") or "").strip()
+    auth_domain = (os.getenv("FIREBASE_AUTH_DOMAIN") or "").strip()
+    if not auth_domain and project_id:
+        auth_domain = f"{project_id}.firebaseapp.com"
+    return {
+        "apiKey": api_key,
+        "authDomain": auth_domain,
+        "projectId": project_id,
+        "appId": (os.getenv("FIREBASE_APP_ID") or "").strip(),
+        "messagingSenderId": (os.getenv("FIREBASE_MESSAGING_SENDER_ID") or "").strip(),
+    }
+
+
 @app.get("/api/config")
 def api_config():
     """Public Firebase web config + feature flags for the browser."""
+    fb = _firebase_web_config()
     return jsonify(
         {
-            "firebase": {
-                "apiKey": os.getenv("FIREBASE_WEB_API_KEY", ""),
-                "authDomain": os.getenv("FIREBASE_AUTH_DOMAIN", ""),
-                "projectId": os.getenv("FIREBASE_PROJECT_ID", ""),
-                "appId": os.getenv("FIREBASE_APP_ID", ""),
-                "messagingSenderId": os.getenv("FIREBASE_MESSAGING_SENDER_ID", ""),
-            },
+            "firebase": fb,
             "firestore_enabled": firebase_store.is_configured(),
         }
     )

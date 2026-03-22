@@ -151,15 +151,25 @@ function updateAuthUI(user) {
   }
 }
 
+function firebaseConfigReady(fb) {
+  return Boolean(
+    fb &&
+      fb.apiKey &&
+      fb.authDomain &&
+      fb.projectId
+  );
+}
+
 async function initFirebaseClient() {
   try {
     const res = await fetch("/api/config");
     const cfg = await res.json();
-    if (!cfg.firebase || !cfg.firebase.apiKey) {
+    const fb = cfg.firebase;
+    if (!firebaseConfigReady(fb)) {
       if (signInGoogleEl) signInGoogleEl.disabled = true;
       return;
     }
-    firebase.initializeApp(cfg.firebase);
+    firebase.initializeApp(fb);
     firebaseAuth = firebase.auth();
     firebaseAuth.onAuthStateChanged((user) => {
       updateAuthUI(user);

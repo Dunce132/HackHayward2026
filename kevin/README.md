@@ -47,7 +47,7 @@ Use this for **accounts**, **saved / visited restaurants**, and **preferences** 
 1. In [Firebase Console](https://console.firebase.google.com), create or open a project.
 2. Enable **Authentication** → Sign-in method → **Google**.
 3. Enable **Firestore** (Native mode). For a hackathon you can start in test mode; tighten rules for production.
-4. Register a **Web** app under Project settings and copy values into `.env`: `FIREBASE_WEB_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID`, `FIREBASE_MESSAGING_SENDER_ID`.
+4. Register a **Web** app under Project settings and copy values into `.env`: `FIREBASE_WEB_API_KEY`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID`, `FIREBASE_MESSAGING_SENDER_ID`. Set `FIREBASE_AUTH_DOMAIN` if you use a custom domain; otherwise the server defaults it to `{FIREBASE_PROJECT_ID}.firebaseapp.com`.
 5. **Service account** (for the Flask server): Project settings → Service accounts → Generate new private key (JSON). Set `GOOGLE_APPLICATION_CREDENTIALS` to that file’s path on the machine running `app.py` (see `.env.example`).
 6. Install deps: `pip install -r requirements.txt` (includes `firebase-admin`).
 

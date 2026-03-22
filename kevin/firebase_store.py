@@ -180,3 +180,161 @@ def list_restaurant_records(uid: str, subcollection: str, limit: int = 50) -> Li
         return out
     except Exception:  # pylint: disable=broad-except
         return []
+
+
+def delete_restaurant_record(uid: str, subcollection: str, doc_id: str) -> bool:
+    """Delete a saved or visited restaurant. Returns True if deleted."""
+    if not init_firebase():
+        return False
+    try:
+        ref = _user_doc_ref(uid).collection(subcollection).document(doc_id)
+        ref.delete()
+        return True
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
+def save_user_location(uid: str, location: str, lat: Optional[float], lng: Optional[float]) -> None:
+    """Save user's preferred location to Firestore."""
+    if not init_firebase():
+        return
+    _user_doc_ref(uid).set(
+        {
+            "savedLocation": location or "",
+            "savedLat": lat,
+            "savedLng": lng,
+            "locationUpdatedAt": _utc_now_iso(),
+            "updatedAt": _utc_now_iso(),
+        },
+        merge=True,
+    )
+
+
+def get_user_location(uid: str) -> Dict[str, Any]:
+    """Get user's saved location."""
+    if not init_firebase():
+        return {}
+    try:
+        snap = _user_doc_ref(uid).get()
+        if not snap.exists:
+            return {}
+        data = snap.to_dict() or {}
+        return {
+            "location": data.get("savedLocation") or "",
+            "lat": data.get("savedLat"),
+            "lng": data.get("savedLng"),
+        }
+    except Exception:  # pylint: disable=broad-except
+        return {}
+
+
+def save_user_custom_preferences(uid: str, custom_prefs: Dict[str, Any]) -> None:
+    """Save user's custom preference fields (e.g. favorite cuisines, avoid list)."""
+    if not init_firebase():
+        return
+    ref = _user_doc_ref(uid)
+    snap = ref.get()
+    current = (snap.to_dict() or {}).get("customPreferences") or {}
+    merged = {**current, **custom_prefs}
+    ref.set({"customPreferences": merged, "updatedAt": _utc_now_iso()}, merge=True)
+
+
+def get_user_custom_preferences(uid: str) -> Dict[str, Any]:
+    if not init_firebase():
+        return {}
+    try:
+        snap = _user_doc_ref(uid).get()
+        if not snap.exists:
+            return {}
+        return (snap.to_dict() or {}).get("customPreferences") or {}
+    except Exception:  # pylint: disable=broad-except
+        return {}
+
+
+# Live sessions: shared sessions for group restaurant picking
+def _sessions_ref():
+    return _db.collection("liveSessions")
+
+
+def create_live_session(uid: str, session_data: Dict[str, Any]) -> Optional[str]:
+    """Create a live session. Returns session code."""
+    if not init_firebase():
+        return None
+    try:
+        import secrets
+
+        code = secrets.token_hex(3).upper()  # 6-char code
+        doc_ref = _sessions_ref().document(code)
+        doc_ref.set(
+            {
+                "creatorUid": uid,
+                "createdAt": _utc_now_iso(),
+                "members": [uid],
+                "restaurants": session_data.get("restaurants", []),
+                "votes": {},
+                "status": "active",
+            },
+            merge=True,
+        )
+        return code
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+def get_live_session(code: str) -> Optional[Dict[str, Any]]:
+    if not init_firebase():
+        return None
+    try:
+        doc = _sessions_ref().document(code.upper()).get()
+        if not doc.exists:
+            return None
+        d = doc.to_dict() or {}
+        d["id"] = doc.id
+        return d
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+def join_live_session(code: str, uid: str) -> bool:
+    if not init_firebase():
+        return False
+    try:
+        ref = _sessions_ref().document(code.upper())
+        snap = ref.get()
+        if not snap.exists:
+            return False
+        members = list((snap.to_dict() or {}).get("members") or [])
+        if uid not in members:
+            members.append(uid)
+            ref.update({"members": members, "updatedAt": _utc_now_iso()})
+        return True
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
+def add_session_vote(code: str, uid: str, place_id: str) -> bool:
+    if not init_firebase():
+        return False
+    try:
+        ref = _sessions_ref().document(code.upper())
+        ref.update(
+            {
+                f"votes.{uid}": place_id,
+                "updatedAt": _utc_now_iso(),
+            }
+        )
+        return True
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
+def update_live_session_restaurants(code: str, restaurants: List[Dict[str, Any]]) -> bool:
+    if not init_firebase():
+        return False
+    try:
+        _sessions_ref().document(code.upper()).update(
+            {"restaurants": restaurants, "updatedAt": _utc_now_iso()}
+        )
+        return True
+    except Exception:  # pylint: disable=broad-except
+        return False

@@ -2,6 +2,7 @@ const chatEl = document.getElementById("chat");
 const formEl = document.getElementById("chat-form");
 const messageEl = document.getElementById("message");
 const locationEl = document.getElementById("location");
+const locationAutocompleteEl = document.getElementById("location-autocomplete");
 const restaurantsEl = document.getElementById("restaurants");
 const localTimeEl = document.getElementById("local-time");
 const resetChatEl = document.getElementById("reset-chat");
@@ -699,6 +700,71 @@ async function autofillLocationFromCoords(lat, lng) {
     /* ignore */
   }
 }
+
+let locationAutocompleteTimer = null;
+let locationAutocompleteHideTimer = null;
+
+function hideLocationAutocomplete() {
+  if (!locationAutocompleteEl || !locationEl) return;
+  locationAutocompleteEl.classList.add("hidden");
+  locationAutocompleteEl.innerHTML = "";
+  locationEl.setAttribute("aria-expanded", "false");
+}
+
+function setupLocationAutocomplete() {
+  if (!locationEl || !locationAutocompleteEl) return;
+
+  locationEl.addEventListener("input", () => {
+    const q = locationEl.value.trim();
+    clearTimeout(locationAutocompleteTimer);
+    if (q.length < 2) {
+      hideLocationAutocomplete();
+      return;
+    }
+    locationAutocompleteTimer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/place-autocomplete?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        if (!res.ok || !data.predictions?.length) {
+          hideLocationAutocomplete();
+          return;
+        }
+        locationAutocompleteEl.innerHTML = "";
+        data.predictions.forEach((p) => {
+          const li = document.createElement("li");
+          li.setAttribute("role", "option");
+          li.className = "location-autocomplete-item";
+          li.tabIndex = -1;
+          li.textContent = p.description || "";
+          li.addEventListener("mousedown", (e) => {
+            e.preventDefault();
+            locationEl.value = p.description || "";
+            hideLocationAutocomplete();
+            locationEl.focus();
+          });
+          locationAutocompleteEl.appendChild(li);
+        });
+        locationAutocompleteEl.classList.remove("hidden");
+        locationEl.setAttribute("aria-expanded", "true");
+      } catch {
+        hideLocationAutocomplete();
+      }
+    }, 280);
+  });
+
+  locationEl.addEventListener("blur", () => {
+    locationAutocompleteHideTimer = setTimeout(hideLocationAutocomplete, 200);
+  });
+  locationEl.addEventListener("focus", () => {
+    clearTimeout(locationAutocompleteHideTimer);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideLocationAutocomplete();
+  });
+}
+
+setupLocationAutocomplete();
 
 if ("geolocation" in navigator) {
   navigator.geolocation.getCurrentPosition(

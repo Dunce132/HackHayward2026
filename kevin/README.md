@@ -36,7 +36,7 @@ Optional: set `RECOMMENDATION_THRESHOLD` (default `38`, range `15`–`90`) in `.
 
 In Google Cloud Console:
 
-1. Enable `Places API`, `Geocoding API`, `Distance Matrix API`, and `Time Zone API` for your project. Geocoding fills the City/Area field from GPS and resolves the typed city to lat/lng for search anchoring (typed area is preferred over raw GPS for *where* to look), for the clock when GPS is off, and for drive times when needed; Distance Matrix powers drive times from the user’s GPS when available; Time Zone powers local clock display for that area. **Dish/menu hints:** Place Details provides editorial summaries and reviews—not a full Business Profile menu; the app uses those when you ask what to order.
+1. Enable `Places API` (includes **Place Autocomplete** for the city/area field), `Geocoding API`, `Distance Matrix API`, and `Time Zone API` for your project. Geocoding fills the City/Area field from GPS and resolves the typed city to lat/lng for search anchoring (typed area is preferred over raw GPS for *where* to look), for the clock when GPS is off, and for drive times when needed; Distance Matrix powers drive times from the user’s GPS when available; Time Zone powers local clock display for that area. **Dish/menu hints:** Place Details provides editorial summaries and reviews—not a full Business Profile menu; the app uses those when you ask what to order.
 2. Create an API key.
 3. Restrict the key for Places API usage.
 

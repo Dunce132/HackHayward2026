@@ -56,7 +56,25 @@
             <div class="chat-column">
               <section class="controls">
                 <label for="location">City / Area</label>
-                <input id="location" placeholder="e.g. Hayward, CA" />
+                <div class="location-field">
+                  <input
+                    id="location"
+                    type="text"
+                    placeholder="Start typing a city or area…"
+                    autocomplete="off"
+                    autocorrect="off"
+                    spellcheck="false"
+                    aria-autocomplete="list"
+                    aria-controls="location-autocomplete"
+                    aria-expanded="false"
+                  />
+                  <ul
+                    id="location-autocomplete"
+                    class="location-autocomplete hidden"
+                    role="listbox"
+                    aria-label="Location suggestions"
+                  ></ul>
+                </div>
               </section>
 
               <section id="chat" class="chat"></section>

@@ -23,8 +23,9 @@ load_dotenv()
 FS_SAVED = "savedRestaurants"
 FS_VISITED = "visitedRestaurants"
 
-PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY", "")
-GOOGLE_PLACES_API_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "")
+# Strip whitespace/newlines — .env paste errors break HTTP headers (Invalid header value)
+PERPLEXITY_API_KEY = (os.getenv("PERPLEXITY_API_KEY") or "").strip()
+GOOGLE_PLACES_API_KEY = (os.getenv("GOOGLE_PLACES_API_KEY") or "").strip()
 PORT = int(os.getenv("PORT", "8080"))
 try:
     RECOMMENDATION_THRESHOLD = max(15, min(90, int(os.getenv("RECOMMENDATION_THRESHOLD", "38"))))
@@ -1011,6 +1012,45 @@ def _city_state_from_geocode(result: Dict[str, Any]) -> str:
             return ", ".join(parts)
         return parts[0]
     return ""
+
+
+@app.get("/api/place-autocomplete")
+def place_autocomplete():
+    """Google Places Autocomplete for city/area (API key stays on server)."""
+    if not GOOGLE_PLACES_API_KEY:
+        return jsonify({"error": "Places not configured"}), 500
+    q = _safe_strip(request.args.get("q"))
+    if len(q) < 2:
+        return jsonify({"predictions": []})
+
+    try:
+        ac_resp = requests.get(
+            "https://maps.googleapis.com/maps/api/place/autocomplete/json",
+            params={
+                "input": q,
+                "types": "(cities)",
+                "key": GOOGLE_PLACES_API_KEY,
+            },
+            timeout=10,
+        )
+        ac_resp.raise_for_status()
+        data = ac_resp.json()
+    except requests.RequestException as exc:
+        return jsonify({"error": str(exc)}), 502
+
+    status = data.get("status")
+    if status not in ("OK", "ZERO_RESULTS"):
+        return jsonify({"error": data.get("error_message", status)}), 502
+
+    preds: List[Dict[str, Any]] = []
+    for p in (data.get("predictions") or [])[:12]:
+        preds.append(
+            {
+                "description": p.get("description"),
+                "place_id": p.get("place_id"),
+            }
+        )
+    return jsonify({"predictions": preds})
 
 
 @app.get("/api/reverse-geocode")

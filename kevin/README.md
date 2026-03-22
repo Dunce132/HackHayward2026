@@ -69,6 +69,18 @@ Then run:
 
 Cloud Run will output a public HTTPS URL for the app.
 
+### Firebase sign-in on Cloud Run (if Google sign-in fails after deploy)
+
+1. **Set the same Firebase web env vars on the service** as locally (`FIREBASE_WEB_API_KEY`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID`, `FIREBASE_MESSAGING_SENDER_ID`, plus Admin credentials — see Cloud Run docs for Secret Manager). Confirm in the browser: `https://YOUR-SERVICE-URL.run.app/api/config` shows non-empty `firebase.apiKey`, `authDomain`, `projectId`.
+
+2. **Firebase Console → Authentication → Settings → Authorized domains** — add your **Cloud Run hostname** only (no `https://`), e.g. `my-service-xxxxx-uc.a.run.app`. Without this, Google sign-in returns `auth/unauthorized-domain`.
+
+3. **Google Cloud Console → APIs & Services → Credentials** — if your **Browser key** (same key as `FIREBASE_WEB_API_KEY`) has **HTTP referrer** restrictions, add your Cloud Run URL pattern (e.g. `https://*.run.app/*` or your exact service URL). A key restricted to `localhost` only will break production.
+
+4. Hard-refresh the app after deploy (`Cmd+Shift+R` / `Ctrl+Shift+R`) so the browser loads the latest `app.js`.
+
+5. **Firestore + “memory” + saves:** The browser signs in with Firebase **client** keys, but the server must also load a **Firebase Admin** service account (`GOOGLE_APPLICATION_CREDENTIALS` pointing at the JSON file, or `FIREBASE_CREDENTIALS_JSON` with the JSON string — common on Cloud Run via Secret Manager). Without Admin, the server **cannot verify ID tokens**, so `/api/chat` won’t attach your user id, **preferences won’t sync**, and **Save / visited** will fail. Check `GET /api/config`: `firestore_enabled` should be `true`.
+
 ## Notes
 
 - Do not commit secret keys in source files.

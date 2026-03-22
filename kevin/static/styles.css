@@ -528,6 +528,9 @@ input {
   border-radius: 10px;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
+  /* Let horizontal swipes scroll the carousel instead of the page (mobile Safari / Chrome). */
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
 }
 
 .carousel-track {
@@ -679,6 +682,8 @@ body.chat-ended .chat-form button[type="submit"][disabled] {
   scroll-behavior: smooth;
   border-radius: 8px;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
 }
 
 .inner-carousel-track {

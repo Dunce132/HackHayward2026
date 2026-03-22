@@ -29,6 +29,8 @@ const tabVisitedEl = document.getElementById("tab-visited");
 
 let sessionId = null;
 let firebaseAuth = null;
+/** True when server has Firebase Admin + Firestore (can verify tokens and save). */
+let serverFirestoreEnabled = false;
 let userCoords = null;
 /** After user picks a restaurant, chat input is disabled until Reset. */
 let chatEnded = false;
@@ -160,21 +162,46 @@ function firebaseConfigReady(fb) {
   );
 }
 
+function updateBackendSyncHint() {
+  const hint = document.getElementById("auth-hint");
+  if (!hint) return;
+  const base =
+    "Sign in to save preferences, bookmark restaurants, and get smarter suggestions next time.";
+  if (firebaseAuth && firebaseAuth.currentUser && !serverFirestoreEnabled) {
+    hint.textContent =
+      "Signed in, but the server can’t reach Firestore (missing service account on Cloud Run / server). Saves and synced memory won’t work until GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_CREDENTIALS_JSON is set.";
+    hint.style.color = "#b45309";
+    return;
+  }
+  hint.textContent = base;
+  hint.style.color = "";
+}
+
 async function initFirebaseClient() {
   try {
     const res = await fetch("/api/config");
     const cfg = await res.json();
+    serverFirestoreEnabled = Boolean(cfg.firestore_enabled);
     const fb = cfg.firebase;
     if (!firebaseConfigReady(fb)) {
       if (signInGoogleEl) signInGoogleEl.disabled = true;
+      updateBackendSyncHint();
       return;
     }
     firebase.initializeApp(fb);
     firebaseAuth = firebase.auth();
+    // Complete Google sign-in if we returned from signInWithRedirect
+    try {
+      await firebaseAuth.getRedirectResult();
+    } catch {
+      /* ignore */
+    }
     firebaseAuth.onAuthStateChanged((user) => {
       updateAuthUI(user);
+      updateBackendSyncHint();
       refreshSidebarLists();
     });
+    updateBackendSyncHint();
   } catch {
     if (signInGoogleEl) signInGoogleEl.disabled = true;
   }
@@ -198,6 +225,13 @@ async function saveRestaurantForLater(r) {
     addBubble("Sign in with Google (left) to save restaurants to your account.", "assistant");
     return;
   }
+  if (!serverFirestoreEnabled) {
+    addBubble(
+      "Can’t save: the server isn’t connected to Firestore. Set Firebase Admin credentials (GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_CREDENTIALS_JSON) on the machine or Cloud Run service.",
+      "assistant"
+    );
+    return;
+  }
   try {
     const res = await fetch("/api/restaurants/save", {
       method: "POST",
@@ -206,7 +240,14 @@ async function saveRestaurantForLater(r) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      addBubble(data.error || "Could not save.", "assistant");
+      if (res.status === 401) {
+        addBubble(
+          "Couldn’t save — the server rejected your sign-in token. Try signing out and back in, or confirm the service account matches your Firebase project.",
+          "assistant"
+        );
+      } else {
+        addBubble(data.error || "Could not save.", "assistant");
+      }
       return;
     }
     addBubble(`Saved “${r.name || "this place"}” to your list.`, "assistant");
@@ -218,15 +259,31 @@ async function saveRestaurantForLater(r) {
 
 async function recordVisitToCloud(r) {
   if (!firebaseAuth || !firebaseAuth.currentUser) return;
+  if (!serverFirestoreEnabled) {
+    addBubble(
+      "Your choice wasn’t recorded in the cloud — Firestore isn’t configured on the server (service account missing).",
+      "assistant"
+    );
+    return;
+  }
   try {
-    await fetch("/api/restaurants/visit", {
+    const res = await fetch("/api/restaurants/visit", {
       method: "POST",
       headers: await authHeaders(),
       body: JSON.stringify(restaurantPayload(r)),
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 401) {
+        addBubble("Couldn’t record your visit (sign-in not accepted by server). Try signing out and back in.", "assistant");
+      } else {
+        addBubble(data.error || "Could not record visit.", "assistant");
+      }
+      return;
+    }
     refreshSidebarLists();
-  } catch {
-    /* optional */
+  } catch (e) {
+    addBubble(`Visit save failed: ${e.message}`, "assistant");
   }
 }
 
@@ -812,12 +869,28 @@ if (tabSavedEl && tabVisitedEl && panelSavedEl && panelVisitedEl) {
 if (signInGoogleEl) {
   signInGoogleEl.addEventListener("click", async () => {
     if (!firebaseAuth) {
-      addBubble("Firebase is not configured on the server. Add Firebase keys to .env.", "assistant");
+      addBubble(
+        "Sign-in isn’t available: the server didn’t return a full Firebase config. Locally, set FIREBASE_WEB_API_KEY, FIREBASE_PROJECT_ID, FIREBASE_APP_ID, and FIREBASE_MESSAGING_SENDER_ID in .env and restart. On Cloud Run, set the same variables on the service and redeploy.",
+        "assistant"
+      );
       return;
     }
     try {
       const provider = new firebase.auth.GoogleAuthProvider();
-      await firebaseAuth.signInWithPopup(provider);
+      try {
+        await firebaseAuth.signInWithPopup(provider);
+      } catch (popupErr) {
+        const code = popupErr && popupErr.code;
+        // Popups often blocked on mobile / embedded browsers; full-page redirect works on Cloud Run.
+        if (
+          code === "auth/popup-blocked" ||
+          code === "auth/operation-not-supported-in-this-environment"
+        ) {
+          await firebaseAuth.signInWithRedirect(provider);
+          return;
+        }
+        throw popupErr;
+      }
     } catch (err) {
       addBubble(`Sign-in failed: ${err.message || err}`, "assistant");
     }

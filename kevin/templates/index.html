@@ -6,42 +6,79 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5"
     />
-    <meta name="theme-color" content="#f5f7fb" />
+    <meta name="theme-color" content="#f7f3ef" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <title>Restaurant AI Chatbot</title>
+    <title>Restaurant Decider</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="nav-sidebar" aria-label="Account and history">
+        <div class="lang-selector">
+          <label for="lang-select" data-i18n="language">Language</label>
+          <select id="lang-select" aria-label="Language">
+            <option value="en">English</option>
+            <option value="es">Español</option>
+            <option value="zh">中文</option>
+            <option value="fr">Français</option>
+          </select>
+        </div>
         <div class="auth-box">
-          <p class="nav-sidebar-title">Account</p>
-          <button type="button" id="sign-in-google" class="btn-google">
-            Sign in with Google
-          </button>
-          <button type="button" id="sign-out" class="btn-signout hidden">Sign out</button>
+          <p class="nav-sidebar-title" data-i18n="account">Account</p>
+          <button type="button" id="sign-in-google" class="btn-google" data-i18n="signIn">Sign in with Google</button>
+          <button type="button" id="sign-out" class="btn-signout hidden" data-i18n="signOut">Sign out</button>
           <p id="auth-user-label" class="auth-user-label"></p>
-          <p id="auth-hint" class="auth-hint">
-            Sign in to save preferences, bookmark restaurants, and get smarter suggestions next time.
-          </p>
+          <button type="button" id="btn-profile" class="btn-profile hidden" data-i18n="profilePrefs">Profile & preferences</button>
+          <p id="auth-hint" class="auth-hint" data-i18n="authHint">Sign in to save preferences, bookmark restaurants, and get smarter suggestions.</p>
+        </div>
+
+        <div class="live-session-box">
+          <p class="nav-sidebar-title" data-i18n="groupSession">Group session</p>
+          <button type="button" id="btn-create-session" class="btn-secondary" data-i18n="createSession">Create session</button>
+          <div class="join-session-row">
+            <input id="session-code-input" type="text" data-i18n="code" data-i18n-attr="placeholder" placeholder="Code" maxlength="6" />
+            <button type="button" id="btn-join-session" class="btn-secondary" data-i18n="joinSession">Join</button>
+          </div>
+          <p id="live-session-code" class="live-session-code hidden"></p>
+          <button type="button" id="btn-leave-session" class="btn-ghost hidden" data-i18n="leaveSession">Leave session</button>
         </div>
 
         <nav class="side-nav" aria-label="Saved and visited">
-          <button type="button" class="side-tab active" data-tab="saved" id="tab-saved">Saved</button>
-          <button type="button" class="side-tab" data-tab="visited" id="tab-visited">Visited</button>
+          <button type="button" class="side-tab active" data-tab="saved" id="tab-saved" data-i18n="saved">Saved</button>
+          <button type="button" class="side-tab" data-tab="visited" id="tab-visited" data-i18n="visited">Visited</button>
         </nav>
 
         <div id="panel-saved" class="side-panel" role="tabpanel">
-          <p class="panel-heading">Saved for later</p>
+          <p class="panel-heading" data-i18n="savedForLater">Saved for later</p>
           <ul id="list-saved" class="history-list"></ul>
-          <p id="list-saved-empty" class="history-empty">No saved restaurants yet.</p>
+          <p id="list-saved-empty" class="history-empty" data-i18n="noSaved">No saved restaurants yet.</p>
         </div>
         <div id="panel-visited" class="side-panel hidden" role="tabpanel">
-          <p class="panel-heading">Previously visited</p>
+          <p class="panel-heading" data-i18n="previouslyVisited">Previously visited</p>
           <ul id="list-visited" class="history-list"></ul>
-          <p id="list-visited-empty" class="history-empty">No visits recorded yet.</p>
+          <p id="list-visited-empty" class="history-empty" data-i18n="noVisited">No visits recorded yet.</p>
         </div>
       </aside>
+
+      <div id="profile-modal" class="modal hidden" role="dialog" aria-label="Profile preferences">
+        <div class="modal-content">
+          <h3 data-i18n="profileTitle">Profile & preferences</h3>
+          <p class="modal-desc" data-i18n="profileDesc">Add your own preferences — cuisines you love, foods to avoid.</p>
+          <div class="prefs-grid">
+            <label data-i18n="favCuisines">Favorite cuisines</label>
+            <input id="pref-favorite-cuisines" type="text" data-i18n="favPlaceholder" data-i18n-attr="placeholder" placeholder="e.g. Thai, Vietnamese, Mexican" />
+            <label data-i18n="avoid">Avoid</label>
+            <input id="pref-avoid" type="text" data-i18n="avoidPlaceholder" data-i18n-attr="placeholder" placeholder="e.g. spicy, shellfish" />
+            <label data-i18n="otherNotes">Other notes</label>
+            <input id="pref-notes" type="text" data-i18n="notesPlaceholder" data-i18n-attr="placeholder" placeholder="e.g. prefer outdoor seating" />
+          </div>
+          <button type="button" id="btn-save-preferences" class="btn-primary" data-i18n="savePrefs">Save preferences</button>
+          <button type="button" id="btn-close-profile" class="btn-ghost" data-i18n="close">Close</button>
+        </div>
+      </div>
 
       <div class="app-main">
         <main class="container container--main">
@@ -60,11 +97,15 @@
           <div class="main-layout">
             <div class="chat-column">
               <section class="controls">
-                <label for="location">City / Area</label>
-                <div class="location-field">
-                  <input
-                    id="location"
+                <div class="controls-row">
+                  <div class="location-field-wrap">
+                    <label for="location" data-i18n="cityArea">City / Area</label>
+                    <div class="location-field">
+                      <input
+                        id="location"
                     type="text"
+                    data-i18n="locationPlaceholder"
+                    data-i18n-attr="placeholder"
                     placeholder="Start typing a city or area…"
                     autocomplete="off"
                     autocorrect="off"
@@ -78,36 +119,52 @@
                     class="location-autocomplete hidden"
                     role="listbox"
                     aria-label="Location suggestions"
-                  ></ul>
+                      ></ul>
+                    </div>
+                  </div>
+                  <button type="button" id="btn-save-location" class="btn-icon" title="Save location">💾</button>
+                </div>
+                <div class="range-row">
+                  <label for="location-range" data-i18n="searchRadius">Search radius</label>
+                  <select id="location-range">
+                    <option value="3">3 miles</option>
+                    <option value="5">5 miles</option>
+                    <option value="10" selected>10 miles</option>
+                    <option value="25">25 miles</option>
+                    <option value="50">50 miles</option>
+                  </select>
                 </div>
               </section>
 
               <section id="chat" class="chat"></section>
 
               <section id="quick-replies-section" class="quick-replies hidden" aria-label="Quick answer choices">
-                <p class="quick-replies-title">Quick answers</p>
+                <p class="quick-replies-title" data-i18n="quickAnswers">Quick answers</p>
                 <div id="quick-replies-list" class="quick-replies-list"></div>
                 <div class="quick-replies-actions">
-                  <button type="button" id="quick-replies-clear" class="quick-replies-btn ghost">Clear checks</button>
+                  <button type="button" id="quick-replies-clear" class="quick-replies-btn ghost" data-i18n="clearChecks">Clear checks</button>
                 </div>
               </section>
 
               <form id="chat-form" class="chat-form">
+                <button type="button" id="btn-mic" class="btn-mic" aria-label="Voice input" data-i18n-title="messagePlaceholder">🎤</button>
                 <input
                   id="message"
                   type="text"
-                  placeholder="Type a reply — checked quick answers are included when you send"
+                  data-i18n="messagePlaceholder"
+                  data-i18n-attr="placeholder"
+                  placeholder="Type or tap mic to speak…"
                   autocomplete="off"
                 />
-                <button type="submit">Send</button>
+                <button type="submit" data-i18n="send">Send</button>
               </form>
             </div>
 
             <aside class="results-panel" aria-label="Restaurant recommendations">
-              <h2 class="results-heading">Top matches</h2>
-              <p class="carousel-hint">Up to 5 picks — #1 is the best match. Arrows wrap around.</p>
+              <h2 class="results-heading" data-i18n="topMatches">Top matches</h2>
+              <p class="carousel-hint" data-i18n="carouselHint">Up to 5 picks — #1 is the best match. Swipe or use arrows.</p>
 
-              <div id="carousel-empty" class="carousel-empty">
+              <div id="carousel-empty" class="carousel-empty" data-i18n="carouselEmpty">
                 Answer a few questions — your top picks will appear here, best match first.
               </div>
 
@@ -131,6 +188,7 @@
       </div>
     </div>
 
+    <script src="/static/i18n.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="/static/app.js"></script>

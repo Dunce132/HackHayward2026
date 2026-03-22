@@ -26,8 +26,22 @@ const panelSavedEl = document.getElementById("panel-saved");
 const panelVisitedEl = document.getElementById("panel-visited");
 const tabSavedEl = document.getElementById("tab-saved");
 const tabVisitedEl = document.getElementById("tab-visited");
+const locationRangeEl = document.getElementById("location-range");
+const btnSaveLocationEl = document.getElementById("btn-save-location");
+const btnProfileEl = document.getElementById("btn-profile");
+const profileModalEl = document.getElementById("profile-modal");
+const btnSavePreferencesEl = document.getElementById("btn-save-preferences");
+const btnCloseProfileEl = document.getElementById("btn-close-profile");
+const btnMicEl = document.getElementById("btn-mic");
+const btnCreateSessionEl = document.getElementById("btn-create-session");
+const btnJoinSessionEl = document.getElementById("btn-join-session");
+const sessionCodeInputEl = document.getElementById("session-code-input");
+const liveSessionCodeEl = document.getElementById("live-session-code");
+const btnLeaveSessionEl = document.getElementById("btn-leave-session");
 
 let sessionId = null;
+let liveSessionCode = null;
+let liveSessionPollTimer = null;
 let firebaseAuth = null;
 /** True when server has Firebase Admin + Firestore (can verify tokens and save). */
 let serverFirestoreEnabled = false;
@@ -128,22 +142,33 @@ async function refreshSidebarLists() {
       listSavedEl.innerHTML = "";
       saved.forEach((item) => {
         const li = document.createElement("li");
+        li.className = "history-item";
+        const content = document.createElement("div");
+        content.className = "history-item-content";
         const title = document.createElement("span");
         title.className = "history-item-title";
         title.textContent = item.name || "Restaurant";
-        li.appendChild(title);
+        content.appendChild(title);
         if (item.summary) {
           const sm = document.createElement("span");
           sm.className = "history-item-meta";
           sm.textContent = item.summary.length > 80 ? `${item.summary.slice(0, 80)}…` : item.summary;
-          li.appendChild(sm);
+          content.appendChild(sm);
         }
         if (item.recordedAt) {
           const dt = document.createElement("span");
           dt.className = "history-item-date";
           dt.textContent = formatRecordDate(item.recordedAt);
-          li.appendChild(dt);
+          content.appendChild(dt);
         }
+        li.appendChild(content);
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "history-item-remove";
+        delBtn.setAttribute("aria-label", `Remove ${item.name || "restaurant"}`);
+        delBtn.textContent = "×";
+        delBtn.addEventListener("click", () => deleteSavedRestaurant(item.id));
+        li.appendChild(delBtn);
         listSavedEl.appendChild(li);
       });
     }
@@ -151,16 +176,27 @@ async function refreshSidebarLists() {
       listVisitedEl.innerHTML = "";
       visited.forEach((item) => {
         const li = document.createElement("li");
+        li.className = "history-item";
+        const content = document.createElement("div");
+        content.className = "history-item-content";
         const title = document.createElement("span");
         title.className = "history-item-title";
         title.textContent = item.name || "Restaurant";
-        li.appendChild(title);
+        content.appendChild(title);
         if (item.recordedAt) {
           const dt = document.createElement("span");
           dt.className = "history-item-date";
           dt.textContent = formatRecordDate(item.recordedAt);
-          li.appendChild(dt);
+          content.appendChild(dt);
         }
+        li.appendChild(content);
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "history-item-remove";
+        delBtn.setAttribute("aria-label", `Remove ${item.name || "restaurant"}`);
+        delBtn.textContent = "×";
+        delBtn.addEventListener("click", () => deleteVisitedRestaurant(item.id));
+        li.appendChild(delBtn);
         listVisitedEl.appendChild(li);
       });
     }
@@ -177,10 +213,13 @@ function updateAuthUI(user) {
     signInGoogleEl.classList.add("hidden");
     signOutEl.classList.remove("hidden");
     authUserLabelEl.textContent = user.displayName || user.email || "Signed in";
+    if (btnProfileEl) btnProfileEl.classList.remove("hidden");
+    loadSavedLocation();
   } else {
     signInGoogleEl.classList.remove("hidden");
     signOutEl.classList.add("hidden");
     authUserLabelEl.textContent = "";
+    if (btnProfileEl) btnProfileEl.classList.add("hidden");
   }
 }
 
@@ -318,6 +357,73 @@ async function recordVisitToCloud(r) {
   }
 }
 
+async function deleteSavedRestaurant(docId) {
+  if (!firebaseAuth?.currentUser || !docId) return;
+  try {
+    const res = await fetch(`/api/restaurants/saved/${encodeURIComponent(docId)}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+    if (res.ok) refreshSidebarLists();
+    else addBubble("Could not remove.", "assistant");
+  } catch (e) {
+    addBubble(`Remove failed: ${e.message}`, "assistant");
+  }
+}
+
+async function deleteVisitedRestaurant(docId) {
+  if (!firebaseAuth?.currentUser || !docId) return;
+  try {
+    const res = await fetch(`/api/restaurants/visited/${encodeURIComponent(docId)}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+    if (res.ok) refreshSidebarLists();
+    else addBubble("Could not remove.", "assistant");
+  } catch (e) {
+    addBubble(`Remove failed: ${e.message}`, "assistant");
+  }
+}
+
+async function saveLocationToProfile() {
+  if (!firebaseAuth?.currentUser) {
+    addBubble("Sign in to save your location.", "assistant");
+    return;
+  }
+  try {
+    const res = await fetch("/api/user/location", {
+      method: "PUT",
+      headers: await authHeaders(),
+      body: JSON.stringify({
+        location: locationEl.value.trim(),
+        lat: userCoords?.lat ?? null,
+        lng: userCoords?.lng ?? null,
+      }),
+    });
+    if (res.ok) addBubble("Location saved to your profile.", "assistant");
+    else addBubble("Could not save location.", "assistant");
+  } catch (e) {
+    addBubble(`Save failed: ${e.message}`, "assistant");
+  }
+}
+
+async function loadSavedLocation() {
+  if (!firebaseAuth?.currentUser) return;
+  try {
+    const res = await fetch("/api/user/location", { headers: await authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.location && !locationEl.value.trim()) {
+      locationEl.value = data.location;
+    }
+    if (data.lat != null && data.lng != null && !userCoords) {
+      userCoords = { lat: data.lat, lng: data.lng };
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 function clearQuickReplies() {
   quickRepliesListEl.innerHTML = "";
   quickRepliesSectionEl.classList.add("hidden");
@@ -421,6 +527,7 @@ async function sendChatMessage(message) {
         location: locationEl.value.trim(),
         user_lat: userCoords ? userCoords.lat : null,
         user_lng: userCoords ? userCoords.lng : null,
+        location_range_miles: locationRangeEl ? parseInt(locationRangeEl.value, 10) : 10,
         client_timezone: getClientTimezone(),
       }),
     });
@@ -434,8 +541,14 @@ async function sendChatMessage(message) {
     sessionId = data.session_id;
     addBubble(data.reply, "assistant");
     updateLocalTimeDisplay(data.local_time_display || "");
+    if (locationRangeEl && data.location_range_miles) {
+      locationRangeEl.value = String(data.location_range_miles);
+    }
     renderRestaurants(data.top_options || data.restaurants);
     renderQuickReplies(data.quick_replies);
+    if (liveSessionCode && lastRestaurantList.length) {
+      updateLiveSessionRestaurants();
+    }
   } catch (err) {
     addBubble(`Network error: ${err.message}`, "assistant");
   }
@@ -453,16 +566,56 @@ function resetChat() {
   updateLocalTimeDisplay("");
   clearQuickReplies();
   renderRestaurants([]);
-  addBubble(
-    "Hi! Where do you want to eat, and any dietary restrictions or allergies? (Or say none.)",
-    "assistant"
-  );
+  addBubble(typeof t === "function" ? t("initialGreeting") : "Hi! Where do you want to eat, and any dietary restrictions or allergies? (Or say none.)", "assistant");
+}
+
+let speechVoicesLoaded = false;
+function loadSpeechVoices(cb) {
+  if (speechVoicesLoaded) return cb && cb();
+  const v = speechSynthesis.getVoices();
+  if (v.length) {
+    speechVoicesLoaded = true;
+    return cb && cb();
+  }
+  speechSynthesis.onvoiceschanged = () => {
+    speechVoicesLoaded = true;
+    cb && cb();
+  };
+}
+
+function speakText(text) {
+  if (!("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  loadSpeechVoices(() => {
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.88;
+    u.pitch = 1.02;
+    u.volume = 1;
+    const voices = speechSynthesis.getVoices();
+    const pref = voices.find((v) => /Samantha|Karen|Daniel|Google US English/.test(v.name)) ||
+      voices.find((v) => v.name.includes("Female") && v.lang.startsWith("en")) ||
+      voices.find((v) => v.lang.startsWith("en-US"));
+    if (pref) u.voice = pref;
+    window.speechSynthesis.speak(u);
+  });
 }
 
 function addBubble(text, role) {
   const div = document.createElement("div");
   div.className = `bubble ${role}`;
-  div.textContent = text;
+  const textSpan = document.createElement("span");
+  textSpan.textContent = text;
+  div.appendChild(textSpan);
+  if (role === "assistant" && text && "speechSynthesis" in window) {
+    const speakBtn = document.createElement("button");
+    speakBtn.type = "button";
+    speakBtn.className = "bubble-speak";
+    speakBtn.setAttribute("aria-label", "Read aloud");
+    speakBtn.textContent = "🔊";
+    speakBtn.title = "Read aloud";
+    speakBtn.addEventListener("click", () => speakText(text));
+    div.appendChild(speakBtn);
+  }
   chatEl.appendChild(div);
   chatEl.scrollTop = chatEl.scrollHeight;
 }
@@ -582,7 +735,7 @@ function renderRestaurants(restaurants) {
 
     const rank = document.createElement("span");
     rank.className = "rank-badge";
-    rank.textContent = index === 0 ? "Best match" : `#${index + 1} pick`;
+    rank.textContent = index === 0 ? (typeof t === "function" ? t("bestMatch") : "Best match") : `#${index + 1} ${typeof t === "function" ? t("pick") : "pick"}`;
     card.appendChild(rank);
 
     const refs = getPhotoRefs(r);
@@ -604,7 +757,7 @@ function renderRestaurants(restaurants) {
         const img = document.createElement("img");
         img.alt = r.name || "Photo";
         img.loading = "lazy";
-        img.src = `/api/place-photo?ref=${encodeURIComponent(ref)}`;
+        img.src = `/api/place-photo?ref=${encodeURIComponent(ref)}&maxwidth=1200`;
         slide.appendChild(img);
         innerTrack.appendChild(slide);
       });
@@ -675,6 +828,13 @@ function renderRestaurants(restaurants) {
       card.appendChild(travel);
     }
 
+    if (r.dish_highlight) {
+      const dish = document.createElement("p");
+      dish.className = "dish-highlight";
+      dish.textContent = `${typeof t === "function" ? t("mustTry") : "Must try"}: ${r.dish_highlight}`;
+      card.appendChild(dish);
+    }
+
     if (r.why_fit) {
       const why = document.createElement("p");
       why.className = "note-plain";
@@ -687,7 +847,7 @@ function renderRestaurants(restaurants) {
       website.href = r.website;
       website.target = "_blank";
       website.rel = "noreferrer";
-      website.textContent = "Website";
+      website.textContent = typeof t === "function" ? t("website") : "Website";
       card.appendChild(website);
     }
 
@@ -697,7 +857,7 @@ function renderRestaurants(restaurants) {
       maps.target = "_blank";
       maps.rel = "noreferrer";
       maps.style.marginLeft = "10px";
-      maps.textContent = "Google Maps";
+      maps.textContent = typeof t === "function" ? t("maps") : "Google Maps";
       card.appendChild(maps);
     }
 
@@ -707,7 +867,7 @@ function renderRestaurants(restaurants) {
     const saveBtn = document.createElement("button");
     saveBtn.type = "button";
     saveBtn.className = "btn-save-restaurant";
-    saveBtn.textContent = "Save for later";
+    saveBtn.textContent = typeof t === "function" ? t("saveForLater") : "Save for later";
     saveBtn.disabled = chatEnded;
     saveBtn.setAttribute("aria-label", `Save ${r.name || "restaurant"} without ending chat`);
     if (!chatEnded) {
@@ -721,11 +881,11 @@ function renderRestaurants(restaurants) {
     selectBtn.type = "button";
     selectBtn.className = "btn-select-restaurant";
     if (chatEnded) {
-      selectBtn.textContent = selected ? "Selected" : "Not chosen";
+      selectBtn.textContent = selected ? (typeof t === "function" ? t("selected") : "Selected") : (typeof t === "function" ? t("notChosen") : "Not chosen");
       selectBtn.disabled = true;
       selectBtn.classList.toggle("btn-select-restaurant--muted", !selected);
     } else {
-      selectBtn.textContent = "Choose this place";
+      selectBtn.textContent = typeof t === "function" ? t("chooseThis") : "Choose this place";
       selectBtn.disabled = false;
     }
     selectBtn.setAttribute(
@@ -742,6 +902,17 @@ function renderRestaurants(restaurants) {
 
     selectRow.appendChild(selectBtn);
     actionsRow.appendChild(selectRow);
+
+    if (liveSessionCode && pid) {
+      const voteBtn = document.createElement("button");
+      voteBtn.type = "button";
+      voteBtn.className = "btn-vote";
+      voteBtn.textContent = typeof t === "function" ? t("vote") : "Vote";
+      voteBtn.setAttribute("aria-label", `Vote for ${r.name || "this restaurant"}`);
+      voteBtn.addEventListener("click", () => voteForRestaurant(pid));
+      actionsRow.appendChild(voteBtn);
+    }
+
     card.appendChild(actionsRow);
 
     restaurantsEl.appendChild(card);
@@ -775,10 +946,7 @@ quickRepliesClearEl.addEventListener("click", () => {
   });
 });
 
-addBubble(
-  "Hi! Where do you want to eat, and any dietary restrictions or allergies? (Or say none.)",
-  "assistant"
-);
+addBubble(typeof t === "function" ? t("initialGreeting") : "Hi! Where do you want to eat, and any dietary restrictions or allergies? (Or say none.)", "assistant");
 
 async function autofillLocationFromCoords(lat, lng) {
   if (locationEl.value.trim()) {
@@ -880,6 +1048,255 @@ if ("geolocation" in navigator) {
   );
 }
 
+async function voteForRestaurant(placeId) {
+  if (!liveSessionCode || !firebaseAuth?.currentUser) return;
+  try {
+    const res = await fetch(`/api/live-session/${liveSessionCode}/vote`, {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify({ place_id: placeId }),
+    });
+    if (res.ok) addBubble("Vote recorded!", "assistant");
+    else addBubble("Could not record vote.", "assistant");
+  } catch (e) {
+    addBubble(`Vote failed: ${e.message}`, "assistant");
+  }
+}
+
+async function updateLiveSessionRestaurants() {
+  if (!liveSessionCode || !lastRestaurantList.length) return;
+  try {
+    await fetch(`/api/live-session/${liveSessionCode}/restaurants`, {
+      method: "PUT",
+      headers: await authHeaders(),
+      body: JSON.stringify({
+        restaurants: lastRestaurantList.map((r) => ({
+          place_id: r.place_id,
+          name: r.name,
+          address: r.address,
+          why_fit: r.why_fit,
+          rating: r.rating,
+          price_display: r.price_display,
+          match_score: r.match_score,
+          dish_highlight: r.dish_highlight,
+        })),
+      }),
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+function leaveLiveSession() {
+  liveSessionCode = null;
+  if (liveSessionPollTimer) {
+    clearInterval(liveSessionPollTimer);
+    liveSessionPollTimer = null;
+  }
+  if (liveSessionCodeEl) {
+    liveSessionCodeEl.classList.add("hidden");
+    liveSessionCodeEl.textContent = "";
+  }
+  if (btnLeaveSessionEl) btnLeaveSessionEl.classList.add("hidden");
+}
+
+function startLiveSessionPoll() {
+  if (liveSessionPollTimer) clearInterval(liveSessionPollTimer);
+  liveSessionPollTimer = setInterval(async () => {
+    if (!liveSessionCode) return;
+    try {
+      const res = await fetch(`/api/live-session/${liveSessionCode}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.restaurants?.length && !lastRestaurantList.length) {
+        renderRestaurants(data.restaurants);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, 3000);
+}
+
+if (btnMicEl) {
+  let recognition = null;
+  if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    try {
+      recognition = new SR();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = "en-US";
+      recognition.maxAlternatives = 3;
+      recognition.onresult = (e) => {
+        const result = e.results[e.results.length - 1];
+        if (!result.isFinal || !messageEl) return;
+        const t = result[0].transcript.trim();
+        if (t) messageEl.value = messageEl.value ? `${messageEl.value} ${t}`.trim() : t;
+      };
+      recognition.onend = () => btnMicEl.classList.remove("recording");
+      recognition.onerror = (e) => {
+        btnMicEl.classList.remove("recording");
+        if (e.error === "not-allowed") {
+          addBubble("Microphone access was denied. Check your browser permissions.", "assistant");
+        } else if (e.error === "no-speech") {
+          addBubble("No speech detected. Try again?", "assistant");
+        }
+      };
+    } catch (err) {
+      recognition = null;
+    }
+  }
+  btnMicEl.addEventListener("click", () => {
+    if (!recognition) {
+      addBubble("Voice input isn't supported in this browser. Try Chrome or Edge.", "assistant");
+      return;
+    }
+    if (btnMicEl.classList.contains("recording")) {
+      try { recognition.stop(); } catch (_) {}
+      btnMicEl.classList.remove("recording");
+      return;
+    }
+    try {
+      recognition.abort && recognition.abort();
+    } catch (_) {}
+    btnMicEl.classList.add("recording");
+    try {
+      recognition.start();
+    } catch (err) {
+      btnMicEl.classList.remove("recording");
+      addBubble("Couldn't start voice input. Try again.", "assistant");
+    }
+  });
+}
+
+if (btnSaveLocationEl) {
+  btnSaveLocationEl.addEventListener("click", saveLocationToProfile);
+}
+
+if (btnProfileEl) {
+  btnProfileEl.addEventListener("click", async () => {
+    if (!profileModalEl) return;
+    try {
+      const res = await fetch("/api/user/custom-preferences", { headers: await authHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        const p = data.customPreferences || {};
+        const fav = document.getElementById("pref-favorite-cuisines");
+        const avoid = document.getElementById("pref-avoid");
+        const notes = document.getElementById("pref-notes");
+        if (fav) fav.value = p.favoriteCuisines || "";
+        if (avoid) avoid.value = p.avoid || "";
+        if (notes) notes.value = p.notes || "";
+      }
+    } catch {
+      /* ignore */
+    }
+    profileModalEl.classList.remove("hidden");
+  });
+}
+
+if (btnCloseProfileEl) {
+  btnCloseProfileEl.addEventListener("click", () => {
+    if (profileModalEl) profileModalEl.classList.add("hidden");
+  });
+}
+
+if (btnSavePreferencesEl) {
+  btnSavePreferencesEl.addEventListener("click", async () => {
+    if (!firebaseAuth?.currentUser) return;
+    const fav = (document.getElementById("pref-favorite-cuisines") || {}).value || "";
+    const avoid = (document.getElementById("pref-avoid") || {}).value || "";
+    const notes = (document.getElementById("pref-notes") || {}).value || "";
+    try {
+      const res = await fetch("/api/user/custom-preferences", {
+        method: "PUT",
+        headers: await authHeaders(),
+        body: JSON.stringify({
+          customPreferences: { favoriteCuisines: fav, avoid, notes },
+        }),
+      });
+      if (res.ok) {
+        addBubble("Preferences saved.", "assistant");
+        if (profileModalEl) profileModalEl.classList.add("hidden");
+      }
+    } catch (e) {
+      addBubble(`Save failed: ${e.message}`, "assistant");
+    }
+  });
+}
+
+if (btnCreateSessionEl) {
+  btnCreateSessionEl.addEventListener("click", async () => {
+    if (!firebaseAuth?.currentUser) {
+      addBubble("Sign in to create a group session.", "assistant");
+      return;
+    }
+    try {
+      const res = await fetch("/api/live-session", {
+        method: "POST",
+        headers: await authHeaders(),
+        body: JSON.stringify({ restaurants: lastRestaurantList }),
+      });
+      const data = await res.json();
+      if (data.code) {
+        liveSessionCode = data.code;
+        if (liveSessionCodeEl) {
+          liveSessionCodeEl.textContent = `Session: ${data.code}`;
+          liveSessionCodeEl.classList.remove("hidden");
+        }
+        if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
+        addBubble(`Session created! Share code: ${data.code}`, "assistant");
+        startLiveSessionPoll();
+      }
+    } catch (e) {
+      addBubble(`Create failed: ${e.message}`, "assistant");
+    }
+  });
+}
+
+if (btnJoinSessionEl && sessionCodeInputEl) {
+  btnJoinSessionEl.addEventListener("click", async () => {
+    const code = sessionCodeInputEl.value.trim().toUpperCase();
+    if (!code) {
+      addBubble("Enter a session code.", "assistant");
+      return;
+    }
+    if (!firebaseAuth?.currentUser) {
+      addBubble("Sign in to join a session.", "assistant");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/live-session/${code}/join`, {
+        method: "POST",
+        headers: await authHeaders(),
+      });
+      if (res.ok) {
+        liveSessionCode = code;
+        if (liveSessionCodeEl) {
+          liveSessionCodeEl.textContent = `Session: ${code}`;
+          liveSessionCodeEl.classList.remove("hidden");
+        }
+        if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
+        addBubble("Joined session!", "assistant");
+        startLiveSessionPoll();
+        const sessRes = await fetch(`/api/live-session/${code}`);
+        if (sessRes.ok) {
+          const sess = await sessRes.json();
+          if (sess.restaurants?.length) renderRestaurants(sess.restaurants);
+        }
+      } else {
+        addBubble("Session not found.", "assistant");
+      }
+    } catch (e) {
+      addBubble(`Join failed: ${e.message}`, "assistant");
+    }
+  });
+}
+
+if (btnLeaveSessionEl) {
+  btnLeaveSessionEl.addEventListener("click", leaveLiveSession);
+}
+
 initFirebaseClient();
 
 if (tabSavedEl && tabVisitedEl && panelSavedEl && panelVisitedEl) {
@@ -930,5 +1347,15 @@ if (signInGoogleEl) {
 if (signOutEl) {
   signOutEl.addEventListener("click", () => {
     firebaseAuth?.signOut();
+  });
+}
+
+if (typeof initI18n === "function") initI18n();
+
+const langSelectEl = document.getElementById("lang-select");
+if (langSelectEl && typeof getLang === "function") {
+  langSelectEl.value = getLang();
+  langSelectEl.addEventListener("change", () => {
+    if (typeof setLang === "function") setLang(langSelectEl.value);
   });
 }

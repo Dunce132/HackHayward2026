@@ -50,11 +50,15 @@ def _questions_until_results_hint(
     return f"About {n} more questions until your first restaurant picks appear."
 
 
+# Location range options (miles -> meters for Google Places API)
+LOCATION_RANGE_OPTIONS = {"3": 4828, "5": 8047, "10": 16093, "25": 40234, "50": 80467}
+
 @dataclass
 class ChatSession:
     location: Optional[str] = None
     user_lat: Optional[float] = None
     user_lng: Optional[float] = None
+    location_range_miles: Optional[int] = 10  # 3, 5, 10, 25, 50
     timezone_id: Optional[str] = None  # IANA, from Google Time Zone API (GPS or geocoded area)
     location_geocode_lat: Optional[float] = None
     location_geocode_lng: Optional[float] = None
@@ -531,8 +535,10 @@ def find_restaurant_match(
 def _account_profile_for_ai(uid: Optional[str], session: ChatSession) -> Dict[str, Any]:
     if not uid or not firebase_store.is_configured():
         return {}
+    custom = firebase_store.get_user_custom_preferences(uid)
+    merged_prefs = {**custom, **session.preferences}
     return {
-        "merged_preferences_from_account_and_chat": dict(session.preferences),
+        "merged_preferences_from_account_and_chat": merged_prefs,
         "recently_saved_restaurant_names": firebase_store.list_recent_names(uid, FS_SAVED),
         "recently_visited_restaurant_names": firebase_store.list_recent_names(uid, FS_VISITED),
     }
@@ -573,7 +579,9 @@ def ask_perplexity_for_next_step(
         "Readiness: set readiness_score >= recommendation_threshold and should_search true once you have "
         "a clear location (or area) AND dietary/allergy info (or explicit no restrictions), "
         "so results can appear; keep refining with follow-ups.\n"
-        "Return ONLY JSON: reply, stage_index, preferences_updates, readiness_score, should_search, search_query, quick_replies."
+        "suggested_restaurant_names: When you recommend or mention specific restaurant names in your reply, always list them here as an array "
+        "(e.g. [\"Joe's Pizza\", \"Mama's Kitchen\"]). This surfaces them in the match section. Use [] only when you don't name specific places.\n"
+        "Return ONLY JSON: reply, stage_index, preferences_updates, readiness_score, should_search, search_query, quick_replies, suggested_restaurant_names."
     )
 
     user_turn = sum(1 for m in session.history if m.get("role") == "user")
@@ -635,6 +643,11 @@ def ask_perplexity_for_next_step(
     parsed.setdefault("search_query", "")
     parsed.setdefault("quick_replies", [])
     parsed["quick_replies"] = _sanitize_quick_replies(parsed.get("quick_replies"))
+    suggested = parsed.get("suggested_restaurant_names")
+    if isinstance(suggested, list):
+        parsed["suggested_restaurant_names"] = [_safe_strip(x) for x in suggested if _safe_strip(x)][:5]
+    else:
+        parsed["suggested_restaurant_names"] = []
     return parsed
 
 
@@ -651,14 +664,16 @@ def rank_restaurants_with_perplexity(
 
     system_prompt = (
         "You rank restaurants from user preferences and Google Places data. Return ONLY JSON: {\"top_options\": [ ... ]}. "
-        "Each option: place_id, name, match_score, why_fit — copied from the provided list only; never invent names.\n"
-        "match_score: 0–100 (fit for this user). "
-        f"Pick up to {TOP_N_RESTAURANTS} unique place_id values when possible.\n"
-        "Prioritize places in or near the user's location string (match formatted_address to the area). "
-        "If account_profile is present, apply merged_preferences_from_account_and_chat and favor variety vs recent lists. "
-        "Then dietary needs and allergies, then meal context, distance, hours, budget, cuisine.\n"
-        "why_fit: ONE short sentence (max ~120 characters). Explain only why it matches THEIR stated wants—"
-        "diet, vibe, budget, distance, or timing. Skip generic praise. No bullets or markdown."
+        "Each option: place_id, name, match_score, why_fit, dish_highlight — copied from the provided list only; never invent names.\n"
+        "CRITICAL: The user's stated cuisine and dietary preferences are NON-NEGOTIABLE. "
+        "If they said Thai, Vietnamese, Italian, etc., EXCLUDE any restaurant that does not match that cuisine. "
+        "If they have dietary restrictions (vegan, halal, gluten-free, etc.), EXCLUDE places that cannot accommodate them. "
+        "Only include restaurants that clearly match the requested cuisine/type AND dietary needs. "
+        "match_score: 0–100. Give 0 or omit restaurants that don't match cuisine or diet. "
+        f"Pick up to {TOP_N_RESTAURANTS} unique place_id values from the provided list that meet these criteria.\n"
+        "Priority order: (1) cuisine/type match, (2) dietary match, (3) location, (4) meal context, (5) budget, (6) hours.\n"
+        "why_fit: ONE short sentence explaining the match. No generic praise.\n"
+        "dish_highlight: ONE must-try dish from reviews/overview. Max 50 chars. Empty string if none."
     )
 
     rank_payload: Dict[str, Any] = {
@@ -710,6 +725,8 @@ def rank_restaurants_with_perplexity(
         merged = dict(base)
         merged["match_score"] = match_score
         merged["why_fit"] = _clip_why_fit(option.get("why_fit"))
+        dish = _safe_strip(option.get("dish_highlight", ""))
+        merged["dish_highlight"] = dish[:80] if dish else ""
         normalized.append(merged)
 
     if not normalized and restaurants:
@@ -717,6 +734,7 @@ def rank_restaurants_with_perplexity(
             merged = dict(r)
             merged["match_score"] = float(merged.get("match_score") or merged.get("roi_score") or 50.0)
             merged["why_fit"] = _clip_why_fit(merged.get("why_fit") or "Close match for your area and search.")
+            merged.setdefault("dish_highlight", "")
             normalized.append(merged)
     return normalized
 
@@ -811,6 +829,7 @@ def search_restaurants(
     location: Optional[str],
     user_lat: Optional[float],
     user_lng: Optional[float],
+    radius_meters: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     if not GOOGLE_PLACES_API_KEY:
         raise RuntimeError("GOOGLE_PLACES_API_KEY is not set")
@@ -840,6 +859,8 @@ def search_restaurants(
     origin_lat, origin_lng = search_lat, search_lng
 
     results: List[Dict[str, Any]] = []
+    radius = radius_meters or LOCATION_RANGE_OPTIONS.get("10", 16093)
+
     if origin_lat is not None and origin_lng is not None:
         nearby_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
         keyword = sq or "restaurant"
@@ -847,7 +868,7 @@ def search_restaurants(
             nearby_url,
             params={
                 "location": f"{origin_lat},{origin_lng}",
-                "radius": 8000,
+                "radius": radius,
                 "type": "restaurant",
                 "keyword": keyword,
                 "key": GOOGLE_PLACES_API_KEY,
@@ -871,7 +892,7 @@ def search_restaurants(
         }
         if origin_lat is not None and origin_lng is not None:
             text_params["location"] = f"{origin_lat},{origin_lng}"
-            text_params["radius"] = 12000
+            text_params["radius"] = radius
 
         text_resp = requests.get(
             text_search_url,
@@ -907,6 +928,8 @@ def search_restaurants(
                         "user_ratings_total",
                         "photos",
                         "geometry",
+                        "editorial_summary",
+                        "reviews",
                     ]
                 ),
                 "key": GOOGLE_PLACES_API_KEY,
@@ -927,6 +950,13 @@ def search_restaurants(
         lng = loc.get("lng")
         hours_text = _hours_text_from_place_details(details_data)
         pl = details_data.get("price_level")
+        es = details_data.get("editorial_summary") or {}
+        overview = _safe_strip(es.get("overview")) if isinstance(es, dict) else ""
+        review_texts = []
+        for r in (details_data.get("reviews") or [])[:3]:
+            txt = _safe_strip((r or {}).get("text"))
+            if txt and len(txt) > 20:
+                review_texts.append(txt[:300] + ("…" if len(txt) > 300 else ""))
 
         restaurants.append(
             {
@@ -946,6 +976,8 @@ def search_restaurants(
                 "photo_references": photo_refs,
                 "lat": lat,
                 "lng": lng,
+                "editorial_overview": overview,
+                "review_excerpts": review_texts,
             }
         )
 
@@ -956,18 +988,56 @@ def search_restaurants(
     return restaurants
 
 
+def search_restaurants_by_names(
+    names: List[str],
+    location: Optional[str],
+    user_lat: Optional[float],
+    user_lng: Optional[float],
+) -> List[Dict[str, Any]]:
+    """Search for specific restaurant names; returns matches in same format as search_restaurants."""
+    if not names or not GOOGLE_PLACES_API_KEY:
+        return []
+    location_part = _safe_strip(location)
+    found: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    for name in names[:5]:  # limit to avoid rate limits
+        name_clean = _safe_strip(name)
+        if len(name_clean) < 2:
+            continue
+        query = f"{name_clean} restaurant"
+        if location_part:
+            query = f"{name_clean} in {location_part}"
+        results = search_restaurants(query, location, user_lat, user_lng)
+        for r in results:
+            pid = r.get("place_id")
+            if pid and pid not in seen_ids:
+                r_copy = dict(r)
+                r_copy["match_score"] = 95  # suggested matches rank high
+                r_copy.setdefault("why_fit", "Suggested in chat")
+                r_copy.setdefault("dish_highlight", "")
+                found.append(r_copy)
+                seen_ids.add(pid)
+                break  # take first match per name
+    return found
+
+
 @app.get("/api/place-photo")
 def place_photo():
     """Proxy Place Photos so the browser does not need the API key."""
     ref = request.args.get("ref")
     if not ref or not GOOGLE_PLACES_API_KEY:
         abort(400)
+    try:
+        maxwidth = int(request.args.get("maxwidth", 1200))
+        maxwidth = max(400, min(1600, maxwidth))
+    except (TypeError, ValueError):
+        maxwidth = 1200
     photo_url = "https://maps.googleapis.com/maps/api/place/photo"
     try:
         img_resp = requests.get(
             photo_url,
             params={
-                "maxwidth": 800,
+                "maxwidth": maxwidth,
                 "photo_reference": ref,
                 "key": GOOGLE_PLACES_API_KEY,
             },
@@ -1142,6 +1212,7 @@ def api_config():
         {
             "firebase": fb,
             "firestore_enabled": firebase_store.is_configured(),
+            "location_range_options": [3, 5, 10, 25, 50],
         }
     )
 
@@ -1209,6 +1280,131 @@ def api_visit_restaurant():
     return jsonify({"ok": True, "id": doc_id})
 
 
+@app.delete("/api/restaurants/saved/<doc_id>")
+def api_delete_saved(doc_id):
+    uid = _optional_uid_from_request()
+    if not uid:
+        return jsonify({"error": "Unauthorized"}), 401
+    if firebase_store.delete_restaurant_record(uid, FS_SAVED, doc_id):
+        return jsonify({"ok": True})
+    return jsonify({"error": "Not found or delete failed"}), 404
+
+
+@app.delete("/api/restaurants/visited/<doc_id>")
+def api_delete_visited(doc_id):
+    uid = _optional_uid_from_request()
+    if not uid:
+        return jsonify({"error": "Unauthorized"}), 401
+    if firebase_store.delete_restaurant_record(uid, FS_VISITED, doc_id):
+        return jsonify({"ok": True})
+    return jsonify({"error": "Not found or delete failed"}), 404
+
+
+@app.get("/api/user/location")
+def api_get_location():
+    uid = _optional_uid_from_request()
+    if not uid:
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify(firebase_store.get_user_location(uid))
+
+
+@app.put("/api/user/location")
+def api_put_location():
+    uid = _optional_uid_from_request()
+    if not uid:
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(force=True)
+    location = _safe_strip(body.get("location", ""))
+    lat = body.get("lat")
+    lng = body.get("lng")
+    try:
+        lat = float(lat) if lat is not None else None
+        lng = float(lng) if lng is not None else None
+    except (TypeError, ValueError):
+        lat, lng = None, None
+    firebase_store.save_user_location(uid, location, lat, lng)
+    return jsonify({"ok": True, "location": location, "lat": lat, "lng": lng})
+
+
+@app.get("/api/user/custom-preferences")
+def api_get_custom_preferences():
+    uid = _optional_uid_from_request()
+    if not uid:
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify({"customPreferences": firebase_store.get_user_custom_preferences(uid)})
+
+
+@app.put("/api/user/custom-preferences")
+def api_put_custom_preferences():
+    uid = _optional_uid_from_request()
+    if not uid:
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(force=True)
+    prefs = body.get("customPreferences")
+    if not isinstance(prefs, dict):
+        return jsonify({"error": "customPreferences object required"}), 400
+    firebase_store.save_user_custom_preferences(uid, prefs)
+    return jsonify({"ok": True, "customPreferences": firebase_store.get_user_custom_preferences(uid)})
+
+
+@app.post("/api/live-session")
+def api_create_live_session():
+    uid = _optional_uid_from_request()
+    if not uid:
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(force=True) or {}
+    code = firebase_store.create_live_session(uid, body)
+    if code:
+        return jsonify({"ok": True, "code": code})
+    return jsonify({"error": "Failed to create session"}), 500
+
+
+@app.get("/api/live-session/<code>")
+def api_get_live_session(code):
+    session = firebase_store.get_live_session(code)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+    return jsonify(session)
+
+
+@app.post("/api/live-session/<code>/join")
+def api_join_live_session(code):
+    uid = _optional_uid_from_request()
+    if not uid:
+        return jsonify({"error": "Unauthorized"}), 401
+    if firebase_store.join_live_session(code, uid):
+        return jsonify({"ok": True})
+    return jsonify({"error": "Session not found"}), 404
+
+
+@app.post("/api/live-session/<code>/vote")
+def api_vote(code):
+    uid = _optional_uid_from_request()
+    if not uid:
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(force=True) or {}
+    place_id = _safe_strip(body.get("place_id", ""))
+    if not place_id:
+        return jsonify({"error": "place_id required"}), 400
+    if firebase_store.add_session_vote(code, uid, place_id):
+        return jsonify({"ok": True})
+    return jsonify({"error": "Failed to vote"}), 500
+
+
+@app.put("/api/live-session/<code>/restaurants")
+def api_update_live_restaurants(code):
+    uid = _optional_uid_from_request()
+    if not uid:
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(force=True) or {}
+    restaurants = body.get("restaurants", [])
+    if not isinstance(restaurants, list):
+        return jsonify({"error": "restaurants array required"}), 400
+    if firebase_store.update_live_session_restaurants(code, restaurants):
+        return jsonify({"ok": True})
+    return jsonify({"error": "Failed to update"}), 500
+
+
 @app.get("/")
 def index():
     return render_template("index.html")
@@ -1222,6 +1418,7 @@ def chat():
     location = (payload.get("location") or "").strip()
     user_lat = payload.get("user_lat")
     user_lng = payload.get("user_lng")
+    location_range_miles = payload.get("location_range_miles")
     client_timezone = _safe_strip(payload.get("client_timezone"))
 
     if not user_message:
@@ -1243,6 +1440,14 @@ def chat():
     except (TypeError, ValueError):
         pass
 
+    if location_range_miles is not None:
+        try:
+            miles = int(location_range_miles)
+            if miles in (3, 5, 10, 25, 50):
+                session.location_range_miles = miles
+        except (TypeError, ValueError):
+            pass
+
     if old_loc != session.location:
         session.timezone_id = None
         session.location_geocode_lat = None
@@ -1257,7 +1462,17 @@ def chat():
     if uid:
         try:
             cloud = firebase_store.get_user_preferences(uid)
-            session.preferences = {**cloud, **session.preferences}
+            custom = firebase_store.get_user_custom_preferences(uid)
+            session.preferences = {**custom, **cloud, **session.preferences}
+            # Load saved location if session has none
+            if not session.location or (not session.user_lat and not session.user_lng):
+                saved_loc = firebase_store.get_user_location(uid)
+                if saved_loc.get("location"):
+                    session.location = saved_loc.get("location") or session.location
+                if saved_loc.get("lat") is not None:
+                    session.user_lat = saved_loc.get("lat")
+                if saved_loc.get("lng") is not None:
+                    session.user_lng = saved_loc.get("lng")
         except Exception:  # pylint: disable=broad-except
             # Firestore failures must not return Flask HTML debug pages to the client.
             pass
@@ -1308,6 +1523,7 @@ def chat():
             "restaurants": [],
             "top_options": [],
             "preferences": session.preferences,
+            "location_range_miles": session.location_range_miles or 10,
             "stage_index": session.stage_index,
             "stage_name": STAGES[session.stage_index],
             "readiness_score": session.readiness_score,
@@ -1322,21 +1538,54 @@ def chat():
 
         run_recommendations = should_search or session.recommendations_started
         if run_recommendations:
+            radius_m = LOCATION_RANGE_OPTIONS.get(
+                str(session.location_range_miles or 10), 16093
+            )
             restaurants = search_restaurants(
                 ai_step.get("search_query"),
                 session.location,
                 session.user_lat,
                 session.user_lng,
+                radius_meters=radius_m,
             )
             response_payload["restaurants"] = restaurants
             rank_profile = _account_profile_for_ai(uid, session) if uid else None
-            response_payload["top_options"] = rank_restaurants_with_perplexity(
+            tops = rank_restaurants_with_perplexity(
                 session, restaurants, rank_profile
             )
+            suggested_names = ai_step.get("suggested_restaurant_names") or []
+            if suggested_names and session.location:
+                suggested_places = search_restaurants_by_names(
+                    suggested_names,
+                    session.location,
+                    session.user_lat,
+                    session.user_lng,
+                )
+                seen_pids = {t.get("place_id") for t in tops if t.get("place_id")}
+                for s in suggested_places:
+                    pid = s.get("place_id")
+                    if pid and pid not in seen_pids:
+                        tops.insert(0, s)
+                        seen_pids.add(pid)
+            response_payload["top_options"] = tops[:TOP_N_RESTAURANTS]
             response_payload["action"] = "recommendations_updated"
-            tops = response_payload.get("top_options") or []
-            session.last_place_ids = [t.get("place_id") for t in tops if t.get("place_id")]
-            session.last_place_names = [t.get("name") for t in tops if t.get("name")]
+            session.last_place_ids = [t.get("place_id") for t in tops[:TOP_N_RESTAURANTS] if t.get("place_id")]
+            session.last_place_names = [t.get("name") for t in tops[:TOP_N_RESTAURANTS] if t.get("name")]
+        else:
+            suggested_names = ai_step.get("suggested_restaurant_names") or []
+            if suggested_names and session.location:
+                suggested_places = search_restaurants_by_names(
+                    suggested_names,
+                    session.location,
+                    session.user_lat,
+                    session.user_lng,
+                )
+                if suggested_places:
+                    response_payload["top_options"] = suggested_places[:TOP_N_RESTAURANTS]
+                    response_payload["restaurants"] = suggested_places
+                    response_payload["action"] = "recommendations_updated"
+                    session.last_place_ids = [t.get("place_id") for t in suggested_places if t.get("place_id")]
+                    session.last_place_names = [t.get("name") for t in suggested_places if t.get("name")]
 
         results_in_response = bool(response_payload.get("top_options")) or bool(
             response_payload.get("restaurants")

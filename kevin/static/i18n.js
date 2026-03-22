@@ -1,0 +1,307 @@
+/**
+ * Simple i18n for Restaurant Decider.
+ * Call initI18n() after DOM ready, then use t(key) for translations.
+ */
+const translations = {
+  en: {
+    appTitle: "Restaurant Decider",
+    subtitle: "We ask where you're eating and dietary needs first, then refine with AI + Google Places.",
+    account: "Account",
+    signIn: "Sign in with Google",
+    signOut: "Sign out",
+    profilePrefs: "Profile & preferences",
+    authHint: "Sign in to save preferences, bookmark restaurants, and get smarter suggestions.",
+    groupSession: "Group session",
+    createSession: "Create session",
+    joinSession: "Join",
+    code: "Code",
+    leaveSession: "Leave session",
+    saved: "Saved",
+    visited: "Visited",
+    savedForLater: "Saved for later",
+    previouslyVisited: "Previously visited",
+    noSaved: "No saved restaurants yet.",
+    noVisited: "No visits recorded yet.",
+    profileTitle: "Profile & preferences",
+    profileDesc: "Add your own preferences — cuisines you love, foods to avoid.",
+    favCuisines: "Favorite cuisines",
+    favPlaceholder: "e.g. Thai, Vietnamese, Mexican",
+    avoid: "Avoid",
+    avoidPlaceholder: "e.g. spicy, shellfish",
+    otherNotes: "Other notes",
+    notesPlaceholder: "e.g. prefer outdoor seating",
+    savePrefs: "Save preferences",
+    close: "Close",
+    cityArea: "City / Area",
+    locationPlaceholder: "Start typing a city or area…",
+    searchRadius: "Search radius",
+    miles: "miles",
+    resetChat: "Reset chat",
+    topMatches: "Top matches",
+    carouselHint: "Up to 5 picks — #1 is the best match. Swipe or use arrows.",
+    carouselEmpty: "Answer a few questions — your top picks will appear here, best match first.",
+    quickAnswers: "Quick answers",
+    clearChecks: "Clear checks",
+    messagePlaceholder: "Type or tap mic to speak…",
+    send: "Send",
+    bestMatch: "Best match",
+    pick: "pick",
+    rating: "Rating",
+    price: "Price",
+    mustTry: "Must try",
+    saveForLater: "Save for later",
+    chooseThis: "Choose this place",
+    selected: "Selected",
+    notChosen: "Not chosen",
+    vote: "Vote",
+    website: "Website",
+    maps: "Google Maps",
+    language: "Language",
+    signInToSave: "Sign in to save restaurants to your account.",
+    savedToList: "Saved to your list.",
+    locationSaved: "Location saved to your profile.",
+    prefsSaved: "Preferences saved.",
+    voteRecorded: "Vote recorded!",
+    sessionCreated: "Session created! Share code:",
+    joinedSession: "Joined session!",
+    initialGreeting: "Hi! Where do you want to eat, and any dietary restrictions or allergies? (Or say none.)",
+  },
+  es: {
+    appTitle: "Decisor de Restaurantes",
+    subtitle: "Preguntamos dónde comes y necesidades dietéticas, luego afinamos con IA y Google Places.",
+    account: "Cuenta",
+    signIn: "Iniciar con Google",
+    signOut: "Cerrar sesión",
+    profilePrefs: "Perfil y preferencias",
+    authHint: "Inicia sesión para guardar preferencias, restaurantes y obtener mejores sugerencias.",
+    groupSession: "Sesión grupal",
+    createSession: "Crear sesión",
+    joinSession: "Unirse",
+    code: "Código",
+    leaveSession: "Salir de sesión",
+    saved: "Guardados",
+    visited: "Visitados",
+    savedForLater: "Guardados para después",
+    previouslyVisited: "Visitados anteriormente",
+    noSaved: "Aún no hay restaurantes guardados.",
+    noVisited: "Aún no hay visitas registradas.",
+    profileTitle: "Perfil y preferencias",
+    profileDesc: "Añade tus preferencias — cocinas favoritas, alimentos a evitar.",
+    favCuisines: "Cocinas favoritas",
+    favPlaceholder: "ej. Thai, Vietnamita, Mexicana",
+    avoid: "Evitar",
+    avoidPlaceholder: "ej. picante, mariscos",
+    otherNotes: "Otras notas",
+    notesPlaceholder: "ej. preferir terraza",
+    savePrefs: "Guardar preferencias",
+    close: "Cerrar",
+    cityArea: "Ciudad / Zona",
+    locationPlaceholder: "Escribe una ciudad o zona…",
+    searchRadius: "Radio de búsqueda",
+    miles: "millas",
+    resetChat: "Reiniciar chat",
+    topMatches: "Mejores opciones",
+    carouselHint: "Hasta 5 opciones — #1 es la mejor. Desliza o usa las flechas.",
+    carouselEmpty: "Responde algunas preguntas — tus mejores opciones aparecerán aquí.",
+    quickAnswers: "Respuestas rápidas",
+    clearChecks: "Limpiar",
+    messagePlaceholder: "Escribe o toca el micrófono…",
+    send: "Enviar",
+    bestMatch: "Mejor opción",
+    pick: "opción",
+    rating: "Valoración",
+    price: "Precio",
+    mustTry: "Debes probar",
+    saveForLater: "Guardar",
+    chooseThis: "Elegir este",
+    selected: "Elegido",
+    notChosen: "No elegido",
+    vote: "Votar",
+    website: "Sitio web",
+    maps: "Google Maps",
+    language: "Idioma",
+    signInToSave: "Inicia sesión para guardar restaurantes.",
+    locationSaved: "Ubicación guardada.",
+    prefsSaved: "Preferencias guardadas.",
+    voteRecorded: "Voto registrado.",
+    sessionCreated: "Sesión creada. Código:",
+    joinedSession: "Sesión iniciada.",
+    initialGreeting: "¿Dónde quieres comer y tienes restricciones dietéticas o alergias? (O di ninguna.)",
+  },
+  zh: {
+    appTitle: "餐厅推荐",
+    subtitle: "先询问用餐地点和饮食需求，再用AI和Google Places优化推荐。",
+    account: "账户",
+    signIn: "使用 Google 登录",
+    signOut: "退出登录",
+    profilePrefs: "个人资料与偏好",
+    authHint: "登录以保存偏好、收藏餐厅并获取更智能的建议。",
+    groupSession: "群组会话",
+    createSession: "创建会话",
+    joinSession: "加入",
+    code: "代码",
+    leaveSession: "离开会话",
+    saved: "已保存",
+    visited: "已访问",
+    savedForLater: "稍后前往",
+    previouslyVisited: "之前访问过",
+    noSaved: "暂无已保存的餐厅。",
+    noVisited: "暂无访问记录。",
+    profileTitle: "个人资料与偏好",
+    profileDesc: "添加你的偏好 — 喜欢的菜系、要避免的食物。",
+    favCuisines: "喜欢的菜系",
+    favPlaceholder: "如：泰国菜、越南菜、墨西哥菜",
+    avoid: "避免",
+    avoidPlaceholder: "如：辣、海鲜",
+    otherNotes: "其他备注",
+    notesPlaceholder: "如：偏好户外座位",
+    savePrefs: "保存偏好",
+    close: "关闭",
+    cityArea: "城市 / 区域",
+    locationPlaceholder: "输入城市或区域…",
+    searchRadius: "搜索范围",
+    miles: "英里",
+    resetChat: "重置对话",
+    topMatches: "最佳推荐",
+    carouselHint: "最多5个选择 — #1为最佳。滑动或使用箭头。",
+    carouselEmpty: "回答几个问题后，最佳推荐将显示在此处。",
+    quickAnswers: "快捷回复",
+    clearChecks: "清除",
+    messagePlaceholder: "输入或点击麦克风说话…",
+    send: "发送",
+    bestMatch: "最佳推荐",
+    pick: "选择",
+    rating: "评分",
+    price: "价格",
+    mustTry: "必尝",
+    saveForLater: "保存",
+    chooseThis: "选择此处",
+    selected: "已选",
+    notChosen: "未选",
+    vote: "投票",
+    website: "网站",
+    maps: "Google 地图",
+    language: "语言",
+    signInToSave: "请登录以保存餐厅。",
+    locationSaved: "位置已保存。",
+    prefsSaved: "偏好已保存。",
+    voteRecorded: "投票已记录。",
+    sessionCreated: "会话已创建，分享代码：",
+    joinedSession: "已加入会话。",
+    initialGreeting: "你好！你想在哪里吃饭？有什么饮食限制或过敏吗？（或说没有。）",
+  },
+  fr: {
+    appTitle: "Décideur de Restaurants",
+    subtitle: "On demande où vous mangez et vos besoins alimentaires, puis on affine avec IA et Google Places.",
+    account: "Compte",
+    signIn: "Se connecter avec Google",
+    signOut: "Se déconnecter",
+    profilePrefs: "Profil et préférences",
+    authHint: "Connectez-vous pour sauvegarder vos préférences et restaurants.",
+    groupSession: "Session groupe",
+    createSession: "Créer une session",
+    joinSession: "Rejoindre",
+    code: "Code",
+    leaveSession: "Quitter",
+    saved: "Enregistrés",
+    visited: "Visités",
+    savedForLater: "Enregistrés",
+    previouslyVisited: "Déjà visités",
+    noSaved: "Aucun restaurant enregistré.",
+    noVisited: "Aucune visite enregistrée.",
+    profileTitle: "Profil et préférences",
+    profileDesc: "Ajoutez vos préférences — cuisines préférées, aliments à éviter.",
+    favCuisines: "Cuisines préférées",
+    favPlaceholder: "ex. Thaï, Vietnamien, Mexicain",
+    avoid: "À éviter",
+    avoidPlaceholder: "ex. épicé, crustacés",
+    otherNotes: "Autres notes",
+    notesPlaceholder: "ex. préférer terrasse",
+    savePrefs: "Enregistrer",
+    close: "Fermer",
+    cityArea: "Ville / Quartier",
+    locationPlaceholder: "Tapez une ville ou un quartier…",
+    searchRadius: "Rayon de recherche",
+    miles: "mi",
+    resetChat: "Réinitialiser",
+    topMatches: "Meilleures options",
+    carouselHint: "Jusqu'à 5 options — #1 est la meilleure.",
+    carouselEmpty: "Répondez à quelques questions pour voir vos options ici.",
+    quickAnswers: "Réponses rapides",
+    clearChecks: "Effacer",
+    messagePlaceholder: "Tapez ou appuyez sur le micro…",
+    send: "Envoyer",
+    bestMatch: "Meilleure option",
+    pick: "option",
+    rating: "Note",
+    price: "Prix",
+    mustTry: "À essayer",
+    saveForLater: "Enregistrer",
+    chooseThis: "Choisir",
+    selected: "Choisi",
+    notChosen: "Non choisi",
+    vote: "Voter",
+    website: "Site web",
+    maps: "Google Maps",
+    language: "Langue",
+    signInToSave: "Connectez-vous pour enregistrer des restaurants.",
+    locationSaved: "Emplacement enregistré.",
+    prefsSaved: "Préférences enregistrées.",
+    voteRecorded: "Vote enregistré.",
+    sessionCreated: "Session créée. Code:",
+    joinedSession: "Session rejointe.",
+    initialGreeting: "Où voulez-vous manger et avez-vous des restrictions alimentaires ou allergies ? (Ou dites aucune.)",
+  },
+};
+
+let currentLang = "en";
+
+function t(key) {
+  const lang = translations[currentLang] || translations.en;
+  return lang[key] ?? translations.en[key] ?? key;
+}
+
+function getLang() {
+  return currentLang;
+}
+
+function setLang(lang) {
+  if (translations[lang]) {
+    currentLang = lang;
+    try {
+      localStorage.setItem("restaurant-decider-lang", lang);
+    } catch (_) {}
+    applyTranslations();
+    document.documentElement.lang = lang === "zh" ? "zh-CN" : lang;
+  }
+}
+
+function applyTranslations() {
+  document.title = t("appTitle");
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const key = el.getAttribute("data-i18n");
+    const val = t(key);
+    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+      const attr = el.getAttribute("data-i18n-attr") || "placeholder";
+      el.setAttribute(attr, val);
+    } else {
+      el.textContent = val;
+    }
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    el.setAttribute("title", t(el.getAttribute("data-i18n-title")));
+  });
+}
+
+function initI18n() {
+  try {
+    const saved = localStorage.getItem("restaurant-decider-lang");
+    if (saved && translations[saved]) currentLang = saved;
+  } catch (_) {}
+  const navLang = navigator.language.split("-")[0];
+  if (!localStorage.getItem("restaurant-decider-lang") && translations[navLang]) {
+    currentLang = navLang;
+  }
+  document.documentElement.lang = currentLang === "zh" ? "zh-CN" : currentLang;
+  applyTranslations();
+}

@@ -1341,9 +1341,7 @@ def api_put_custom_preferences():
 
 @app.post("/api/live-session")
 def api_create_live_session():
-    uid = _optional_uid_from_request()
-    if not uid:
-        return jsonify({"error": "Unauthorized"}), 401
+    uid = _optional_uid_from_request() or f"anon-{uuid.uuid4().hex[:12]}"
     body = request.get_json(force=True) or {}
     code = firebase_store.create_live_session(uid, body)
     if not code:
@@ -1417,9 +1415,7 @@ def api_get_live_session(code):
 
 @app.post("/api/live-session/<code>/join")
 def api_join_live_session(code):
-    uid = _optional_uid_from_request()
-    if not uid:
-        return jsonify({"error": "Unauthorized"}), 401
+    uid = _optional_uid_from_request() or f"anon-{uuid.uuid4().hex[:12]}"
     body = request.get_json(force=True) or {}
     display_name = _safe_strip(body.get("display_name", "")) or "Guest"
     code = code.upper()
@@ -1439,7 +1435,7 @@ def api_join_live_session(code):
 def api_vote(code):
     uid = _optional_uid_from_request()
     if not uid:
-        return jsonify({"error": "Unauthorized"}), 401
+        uid = f"anon-{uuid.uuid4().hex[:12]}"
     body = request.get_json(force=True) or {}
     place_id = _safe_strip(body.get("place_id", ""))
     if not place_id:
@@ -1457,7 +1453,7 @@ def api_vote(code):
 def api_update_live_restaurants(code):
     uid = _optional_uid_from_request()
     if not uid:
-        return jsonify({"error": "Unauthorized"}), 401
+        uid = f"anon-{uuid.uuid4().hex[:12]}"
     body = request.get_json(force=True) or {}
     restaurants = body.get("restaurants", [])
     if not isinstance(restaurants, list):

@@ -1347,62 +1347,70 @@ function hideLobbyModal() {
 
 if (btnCreateSessionEl) {
   btnCreateSessionEl.addEventListener("click", async () => {
-    if (!firebaseAuth?.currentUser) {
-      addBubble("Sign in to create a group session.", "assistant");
-      return;
-    }
-    showLobbyModal(async (displayName) => {
-      try {
-        const initialHistory = [];
+    try {
+      const initialHistory = [];
+      if (chatEl) {
         chatEl.querySelectorAll(".bubble").forEach((b) => {
           const role = b.classList.contains("user") ? "user" : "assistant";
           const text = b.querySelector("span")?.textContent?.trim();
           if (text) initialHistory.push({ role, content: text });
         });
-        const res = await fetch("/api/live-session", {
-          method: "POST",
-          headers: await authHeaders(),
-          body: JSON.stringify({
-            restaurants: lastRestaurantList,
-            display_name: displayName,
-            chatState: {
-              history: initialHistory,
-              location: locationEl?.value?.trim() || null,
-              location_range_miles: locationRangeEl ? parseInt(locationRangeEl.value, 10) : 10,
-              stage_index: 0,
-              readiness_score: 0,
-              recommendations_started: false,
-              last_place_ids: [],
-              last_place_names: [],
-              preferences: {},
-            },
-          }),
-        });
-        const data = await res.json();
-        if (data.code) {
-          liveSessionCode = data.code;
-          sessionId = data.code;
-          liveSessionLastHistoryLength = chatEl.querySelectorAll(".bubble").length;
-          if (liveSessionCodeEl) liveSessionCodeEl.value = data.code;
-          if (liveSessionCodeWrapEl) liveSessionCodeWrapEl.classList.remove("hidden");
-          if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
-          addBubble(`Session created! Your code is in the input below — copy it (Ctrl+C / Cmd+C) to share.`, "assistant");
-          if (messageEl) {
-            messageEl.value = data.code;
-            messageEl.select();
-            messageEl.focus();
-          }
-          startLiveSessionPoll();
+      }
+      const displayName = firebaseAuth?.currentUser?.displayName?.split(" ")[0] || "Host";
+      const res = await fetch("/api/live-session", {
+        method: "POST",
+        headers: await authHeaders(),
+        body: JSON.stringify({
+          restaurants: lastRestaurantList,
+          display_name: displayName,
+          chatState: {
+            history: initialHistory,
+            location: locationEl?.value?.trim() || null,
+            location_range_miles: locationRangeEl ? parseInt(locationRangeEl.value, 10) : 10,
+            stage_index: 0,
+            readiness_score: 0,
+            recommendations_started: false,
+            last_place_ids: [],
+            last_place_names: [],
+            preferences: {},
+          },
+        }),
+      });
+      const text = await res.text();
+      let data;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        addBubble(`Server error (HTTP ${res.status}). Expected JSON.`, "assistant");
+        return;
+      }
+      if (data.code) {
+        liveSessionCode = data.code;
+        sessionId = data.code;
+        liveSessionLastHistoryLength = chatEl ? chatEl.querySelectorAll(".bubble").length : 0;
+        if (liveSessionCodeEl) liveSessionCodeEl.value = data.code;
+        if (liveSessionCodeWrapEl) liveSessionCodeWrapEl.classList.remove("hidden");
+        if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
+        addBubble(`Session created! Code: ${data.code} — copy it from the input below or the sidebar.`, "assistant");
+        if (messageEl) {
+          messageEl.value = data.code;
+          messageEl.select();
+          messageEl.focus();
+        }
+        startLiveSessionPoll();
+        try {
           const sessRes = await fetch(`/api/live-session/${data.code}`);
           if (sessRes.ok) {
             const sess = await sessRes.json();
             if (sess.members) updateLobbyMembers(sess.members);
           }
-        }
-      } catch (e) {
-        addBubble(`Create failed: ${e.message}`, "assistant");
+        } catch (_) { /* ignore */ }
+      } else {
+        addBubble(data.error || `Failed to create session (HTTP ${res.status}). Try again.`, "assistant");
       }
-    });
+    } catch (e) {
+      addBubble(`Create failed: ${e.message}`, "assistant");
+    }
   });
 }
 
@@ -1411,10 +1419,6 @@ if (btnJoinSessionEl && sessionCodeInputEl) {
     const code = sessionCodeInputEl.value.trim().toUpperCase();
     if (!code) {
       addBubble("Enter a session code.", "assistant");
-      return;
-    }
-    if (!firebaseAuth?.currentUser) {
-      addBubble("Sign in to join a session.", "assistant");
       return;
     }
     showLobbyModal(async (displayName) => {

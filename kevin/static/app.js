@@ -1386,7 +1386,12 @@ if (btnCreateSessionEl) {
           if (liveSessionCodeEl) liveSessionCodeEl.value = data.code;
           if (liveSessionCodeWrapEl) liveSessionCodeWrapEl.classList.remove("hidden");
           if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
-          addBubble(`Session created! Share code: ${data.code}`, "assistant");
+          addBubble(`Session created! Your code is in the input below — copy it (Ctrl+C / Cmd+C) to share.`, "assistant");
+          if (messageEl) {
+            messageEl.value = data.code;
+            messageEl.select();
+            messageEl.focus();
+          }
           startLiveSessionPoll();
           const sessRes = await fetch(`/api/live-session/${data.code}`);
           if (sessRes.ok) {

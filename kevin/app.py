@@ -64,6 +64,8 @@ class ChatSession:
     location_geocode_lng: Optional[float] = None
     location_geocode_for: Optional[str] = None  # session.location string used for geocode cache
     preferences: Dict[str, Any] = field(default_factory=dict)
+    """Per-user preferences for live sessions: {uid: {prefs}}. preferences is merged from all."""
+    preferences_by_user: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     history: List[Dict[str, str]] = field(default_factory=list)
     stage_index: int = 0
     readiness_score: int = 0
@@ -447,9 +449,35 @@ def fetch_place_menu_insights(place_id: str) -> str:
     return "\n".join(parts)
 
 
+def _merge_preferences_by_user(prefs_by_user: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge all per-user preferences into one dict for AI use."""
+    out: Dict[str, Any] = {}
+    for uid, prefs in (prefs_by_user or {}).items():
+        if isinstance(prefs, dict):
+            out.update(prefs)
+    return out
+
+
+def _format_conversation_with_authors(history: List[Dict[str, Any]], max_items: int = 10) -> List[Dict[str, Any]]:
+    """Format history for AI with author labels on user messages."""
+    trimmed = history[-max_items:] if history else []
+    out = []
+    for m in trimmed:
+        role = m.get("role")
+        content = _safe_strip(m.get("content", ""))
+        if not content:
+            continue
+        if role == "user":
+            author = _safe_strip(m.get("authorDisplayName") or m.get("displayName", ""))
+            if author:
+                content = f"{author}: {content}"
+        out.append({"role": role, "content": content})
+    return out
+
+
 def _chat_session_to_dict(session: ChatSession) -> Dict[str, Any]:
     """Serialize ChatSession for Firestore."""
-    return {
+    d: Dict[str, Any] = {
         "history": list(session.history),
         "location": session.location,
         "location_range_miles": session.location_range_miles,
@@ -460,9 +488,12 @@ def _chat_session_to_dict(session: ChatSession) -> Dict[str, Any]:
         "last_place_names": list(session.last_place_names),
         "preferences": dict(session.preferences),
     }
+    if session.preferences_by_user:
+        d["preferences_by_user"] = {k: dict(v) for k, v in session.preferences_by_user.items()}
+    return d
 
 
-def _dict_to_chat_session(d: Dict[str, Any]) -> ChatSession:
+def _dict_to_chat_session(d: Dict[str, Any], use_per_user_prefs: bool = False) -> ChatSession:
     """Deserialize ChatSession from Firestore."""
     s = ChatSession()
     s.history = list(d.get("history") or [])
@@ -473,7 +504,13 @@ def _dict_to_chat_session(d: Dict[str, Any]) -> ChatSession:
     s.recommendations_started = bool(d.get("recommendations_started"))
     s.last_place_ids = list(d.get("last_place_ids") or [])
     s.last_place_names = list(d.get("last_place_names") or [])
-    s.preferences = dict(d.get("preferences") or {})
+    prefs_by_user_raw = d.get("preferences_by_user") or {}
+    s.preferences_by_user = {k: dict(v) for k, v in prefs_by_user_raw.items() if isinstance(v, dict)}
+    legacy_prefs = dict(d.get("preferences") or {})
+    if use_per_user_prefs and s.preferences_by_user:
+        s.preferences = {**legacy_prefs, **_merge_preferences_by_user(s.preferences_by_user)}
+    else:
+        s.preferences = legacy_prefs
     return s
 
 
@@ -576,17 +613,34 @@ def _account_profile_for_ai(uid: Optional[str], session: ChatSession) -> Dict[st
     }
 
 
+_LANG_NAMES = {"en": "English", "es": "Spanish", "zh": "Chinese", "fr": "French", "hi": "Hindi"}
+
+
 def ask_perplexity_for_next_step(
     session: ChatSession,
     user_message: str,
     menu_context: Optional[str] = None,
     account_profile: Optional[Dict[str, Any]] = None,
+    client_lang: str = "en",
+    multi_user_session: bool = False,
 ) -> Dict[str, Any]:
     if not PERPLEXITY_API_KEY:
         raise RuntimeError("PERPLEXITY_API_KEY is not set")
 
+    lang_name = _LANG_NAMES.get(client_lang, "English")
+    lang_instruction = "" if client_lang == "en" else f"\nIMPORTANT: Respond entirely in {lang_name}. All reply text and quick_replies must be in {lang_name}.\n"
+
+    group_hint = ""
+    if multi_user_session:
+        group_hint = (
+            "MULTI-USER SESSION: Multiple people are chatting. User messages are prefixed with their name (e.g. 'Alice: I want Italian'). "
+            "Track preferences PER PERSON. When someone says 'I'm vegetarian', that applies to them. Merge ALL participants' preferences "
+            "for recommendations—find places that satisfy the group (e.g. vegetarian Italian if one wants veg and another wants Italian).\n"
+        )
     system_prompt = (
         "You are a concise restaurant guide. Follow the stages list in order by stage_index.\n"
+        + group_hint
+        + lang_instruction +
         "TOP PRIORITY (do not skip): (0) LOCATION — city/neighborhood/area where they want to eat "
         "(use the UI City/Area field if present, or ask until you have a usable area). "
         "(1) DIETARY RESTRICTIONS — allergies, diets (vegan/halal/kosher/etc.), or explicit none. "
@@ -626,7 +680,7 @@ def ask_perplexity_for_next_step(
         "current_stage_name": STAGES[session.stage_index],
         "stages": STAGES,
         "current_preferences": session.preferences,
-        "conversation_history": session.history[-10:],
+        "conversation_history": _format_conversation_with_authors(session.history, 10) if multi_user_session else session.history[-10:],
         "latest_user_message": user_message,
         "user_turn_number": user_turn,
         "last_assistant_reply": _last_assistant_message(session.history),
@@ -680,6 +734,7 @@ def rank_restaurants_with_perplexity(
     session: ChatSession,
     restaurants: List[Dict[str, Any]],
     account_profile: Optional[Dict[str, Any]] = None,
+    client_lang: str = "en",
 ) -> List[Dict[str, Any]]:
     if not PERPLEXITY_API_KEY:
         raise RuntimeError("PERPLEXITY_API_KEY is not set")
@@ -687,10 +742,21 @@ def rank_restaurants_with_perplexity(
     if not restaurants:
         return []
 
+    lang_name = _LANG_NAMES.get(client_lang, "English")
+    lang_instruction = "" if client_lang == "en" else f" Write why_fit and dish_highlight in {lang_name}.\n"
+
+    group_hint = ""
+    if session.preferences_by_user and len(session.preferences_by_user) > 1:
+        group_hint = (
+            "GROUP PREFERENCES: Multiple people are choosing. preferences/account_profile reflect merged preferences from all. "
+            "Match places that satisfy the GROUP (e.g. vegetarian + Italian = vegetarian Italian options). "
+        )
     system_prompt = (
         "You rank restaurants from user preferences and Google Places data. Return ONLY JSON: {\"top_options\": [ ... ]}. "
+        + group_hint
+        + lang_instruction +
         "Each option: place_id, name, match_score, why_fit, dish_highlight — copied from the provided list only; never invent names.\n"
-        "match_score: 0–100 (fit for this user). "
+        "match_score: 0–100 (fit for this user or group). "
         f"Pick up to {TOP_N_RESTAURANTS} unique place_id values when possible.\n"
         "Prioritize places in or near the user's location string (match formatted_address to the area). "
         "If account_profile is present, apply merged_preferences_from_account_and_chat and favor variety vs recent lists. "
@@ -701,11 +767,12 @@ def rank_restaurants_with_perplexity(
         "Max 50 chars. Use empty string if no clear dish mentioned."
     )
 
+    conv_hist = _format_conversation_with_authors(session.history, 10) if session.preferences_by_user else session.history[-10:]
     rank_payload: Dict[str, Any] = {
         "location": session.location,
         "stage_index": session.stage_index,
         "preferences": session.preferences,
-        "conversation_history": session.history[-10:],
+        "conversation_history": conv_hist,
         "restaurants": restaurants,
     }
     if account_profile:
@@ -1357,10 +1424,10 @@ def api_create_live_session():
             "chatState": body.get("chatState") or {
                 "history": [], "location": None, "location_range_miles": 10,
                 "stage_index": 0, "readiness_score": 0, "recommendations_started": False,
-                "last_place_ids": [], "last_place_names": [], "preferences": {},
+                "last_place_ids": [], "last_place_names": [], "preferences": {}, "preferences_by_user": {},
             },
         }
-    return jsonify({"ok": True, "code": code})
+    return jsonify({"ok": True, "code": code, "uid": uid})
 
 
 def _enrich_live_session(session: Dict[str, Any]) -> Dict[str, Any]:
@@ -1377,17 +1444,22 @@ def _enrich_live_session(session: Dict[str, Any]) -> Dict[str, Any]:
     votes_with_details = []
     for uid, place_id in votes.items():
         r = restaurants.get(place_id, {})
+        place_name = r.get("name")
+        if place_id == "__ANY__":
+            place_name = "Whatever's good"
         match_pct = r.get("match_score")
         if match_pct is not None:
             try:
                 match_pct = int(float(match_pct))
             except (TypeError, ValueError):
                 match_pct = None
+        if place_id == "__ANY__":
+            match_pct = None
         votes_with_details.append({
             "uid": uid,
             "displayName": uid_to_name.get(uid, "?"),
             "place_id": place_id,
-            "place_name": r.get("name"),
+            "place_name": place_name,
             "match_score": match_pct,
         })
     out = dict(session)
@@ -1415,28 +1487,36 @@ def api_get_live_session(code):
 
 @app.post("/api/live-session/<code>/join")
 def api_join_live_session(code):
-    uid = _optional_uid_from_request() or f"anon-{uuid.uuid4().hex[:12]}"
     body = request.get_json(force=True) or {}
+    uid = _optional_uid_from_request()
+    if not uid:
+        cand = body.get("uid")
+        uid = cand if isinstance(cand, str) and cand.startswith("anon-") else None
+    if not uid:
+        uid = f"anon-{uuid.uuid4().hex[:12]}"
     display_name = _safe_strip(body.get("display_name", "")) or "Guest"
     code = code.upper()
     if firebase_store.join_live_session(code, uid, display_name):
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "uid": uid})
     if code in LIVE_SESSIONS:
         members = LIVE_SESSIONS[code].get("members", [])
         uids = [m.get("uid") if isinstance(m, dict) else m for m in members]
         if uid not in uids:
             members.append({"uid": uid, "displayName": display_name})
             LIVE_SESSIONS[code]["members"] = members
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "uid": uid})
     return jsonify({"error": "Session not found"}), 404
 
 
 @app.post("/api/live-session/<code>/vote")
 def api_vote(code):
+    body = request.get_json(force=True) or {}
     uid = _optional_uid_from_request()
     if not uid:
+        cand = body.get("uid")
+        uid = cand if isinstance(cand, str) and cand.startswith("anon-") else None
+    if not uid:
         uid = f"anon-{uuid.uuid4().hex[:12]}"
-    body = request.get_json(force=True) or {}
     place_id = _safe_strip(body.get("place_id", ""))
     if not place_id:
         return jsonify({"error": "place_id required"}), 400
@@ -1451,10 +1531,13 @@ def api_vote(code):
 
 @app.put("/api/live-session/<code>/restaurants")
 def api_update_live_restaurants(code):
+    body = request.get_json(force=True) or {}
     uid = _optional_uid_from_request()
     if not uid:
+        cand = body.get("uid")
+        uid = cand if isinstance(cand, str) and cand.startswith("anon-") else None
+    if not uid:
         uid = f"anon-{uuid.uuid4().hex[:12]}"
-    body = request.get_json(force=True) or {}
     restaurants = body.get("restaurants", [])
     if not isinstance(restaurants, list):
         return jsonify({"error": "restaurants array required"}), 400
@@ -1483,6 +1566,7 @@ def chat():
     user_lng = payload.get("user_lng")
     location_range_miles = payload.get("location_range_miles")
     client_timezone = _safe_strip(payload.get("client_timezone"))
+    client_lang = _safe_strip(payload.get("client_lang", "")) or "en"
 
     if not user_message:
         return jsonify({"error": "message is required"}), 400
@@ -1495,7 +1579,7 @@ def chat():
             chat_state = LIVE_SESSIONS[code].get("chatState", {})
         if not chat_state:
             return jsonify({"error": "Live session not found"}), 404
-        session = _dict_to_chat_session(chat_state)
+        session = _dict_to_chat_session(chat_state, use_per_user_prefs=True)
         session_id = code
     else:
         session_id = get_or_create_session(session_id)
@@ -1533,11 +1617,21 @@ def chat():
         session.timezone_id = None
 
     uid = _optional_uid_from_request()
+    if not uid:
+        body_uid = (payload.get("uid") or "").strip()
+        if isinstance(body_uid, str) and body_uid.startswith("anon-"):
+            uid = body_uid
     if uid:
         try:
             cloud = firebase_store.get_user_preferences(uid)
             custom = firebase_store.get_user_custom_preferences(uid)
-            session.preferences = {**custom, **cloud, **session.preferences}
+            my_prefs = {**custom, **cloud}
+            if use_live and session.preferences_by_user is not None:
+                session.preferences_by_user.setdefault(uid, {})
+                session.preferences_by_user[uid].update(my_prefs)
+                session.preferences = _merge_preferences_by_user(session.preferences_by_user)
+            else:
+                session.preferences = {**my_prefs, **session.preferences}
             # Load saved location if session has none
             if not session.location or (not session.user_lat and not session.user_lng):
                 saved_loc = firebase_store.get_user_location(uid)
@@ -1551,7 +1645,23 @@ def chat():
             # Firestore failures must not return Flask HTML debug pages to the client.
             pass
 
-    session.history.append({"role": "user", "content": user_message})
+    author_display_name = _safe_strip(payload.get("display_name", "")) or None
+    if use_live and author_display_name is None and uid:
+        code_upper = live_session_code.upper()
+        sess = firebase_store.get_live_session(code_upper) or LIVE_SESSIONS.get(code_upper, {})
+        for m in (sess.get("members") or []):
+            if isinstance(m, dict) and m.get("uid") == uid:
+                author_display_name = _safe_strip(m.get("displayName", "")) or "?"
+                break
+    if use_live:
+        user_entry = {"role": "user", "content": user_message}
+        if uid:
+            user_entry["authorUid"] = uid
+        if author_display_name:
+            user_entry["authorDisplayName"] = author_display_name
+        session.history.append(user_entry)
+    else:
+        session.history.append({"role": "user", "content": user_message})
 
     try:
         menu_context: Optional[str] = None
@@ -1561,11 +1671,17 @@ def chat():
                 menu_context = fetch_place_menu_insights(pid)
         ap = _account_profile_for_ai(uid, session) if uid else None
         ai_step = ask_perplexity_for_next_step(
-            session, user_message, menu_context=menu_context, account_profile=ap or None
+            session, user_message, menu_context=menu_context, account_profile=ap or None, client_lang=client_lang,
+            multi_user_session=use_live,
         )
         prefs_up = ai_step.get("preferences_updates")
         if isinstance(prefs_up, dict):
-            session.preferences.update(prefs_up)
+            if use_live and uid and session.preferences_by_user is not None:
+                session.preferences_by_user.setdefault(uid, {})
+                session.preferences_by_user[uid].update(prefs_up)
+                session.preferences = _merge_preferences_by_user(session.preferences_by_user)
+            else:
+                session.preferences.update(prefs_up)
         if uid and isinstance(prefs_up, dict) and prefs_up:
             firebase_store.merge_and_save_preferences(uid, prefs_up)
 
@@ -1625,7 +1741,7 @@ def chat():
             response_payload["restaurants"] = restaurants
             rank_profile = _account_profile_for_ai(uid, session) if uid else None
             response_payload["top_options"] = rank_restaurants_with_perplexity(
-                session, restaurants, rank_profile
+                session, restaurants, rank_profile, client_lang=client_lang
             )
             response_payload["action"] = "recommendations_updated"
             tops = response_payload.get("top_options") or []
@@ -1646,9 +1762,28 @@ def chat():
 
         if use_live:
             code = live_session_code.upper()
-            chat_state = _chat_session_to_dict(session)
-            if not firebase_store.update_live_session_chat_state(code, chat_state) and code in LIVE_SESSIONS:
-                LIVE_SESSIONS[code]["chatState"] = chat_state
+            our_new_messages = session.history[-2:]
+            chat_state_to_save = _chat_session_to_dict(session)
+            latest = firebase_store.get_live_session_chat_state(code) if firebase_store else None
+            if not latest and code in LIVE_SESSIONS:
+                latest = LIVE_SESSIONS[code].get("chatState")
+            if latest:
+                existing_history = list(latest.get("history") or [])
+                existing_sigs = {(m.get("content"), m.get("authorUid"), m.get("role")) for m in existing_history}
+                merged_history = list(existing_history)
+                for m in our_new_messages:
+                    sig = (m.get("content"), m.get("authorUid"), m.get("role"))
+                    if sig not in existing_sigs:
+                        merged_history.append(m)
+                        existing_sigs.add(sig)
+                chat_state_to_save["history"] = merged_history
+                existing_prefs = dict(latest.get("preferences_by_user") or {})
+                for k, v in (chat_state_to_save.get("preferences_by_user") or {}).items():
+                    if isinstance(v, dict):
+                        existing_prefs[k] = {**(existing_prefs.get(k) or {}), **v}
+                chat_state_to_save["preferences_by_user"] = existing_prefs
+            if not firebase_store.update_live_session_chat_state(code, chat_state_to_save) and code in LIVE_SESSIONS:
+                LIVE_SESSIONS[code]["chatState"] = chat_state_to_save
             if response_payload.get("top_options"):
                 if not firebase_store.update_live_session_restaurants(code, response_payload.get("top_options", [])):
                     if code in LIVE_SESSIONS:

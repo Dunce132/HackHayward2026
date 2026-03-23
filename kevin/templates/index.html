@@ -53,6 +53,10 @@
           <div id="live-session-lobby" class="live-session-lobby hidden">
             <p class="lobby-members-label" data-i18n="inLobby">In lobby</p>
             <ul id="lobby-members-list" class="lobby-members-list"></ul>
+            <div id="lobby-votes-wrap" class="lobby-votes-wrap hidden">
+              <p class="lobby-votes-label" data-i18n="voteSummary">Who voted for what</p>
+              <ul id="lobby-votes-list" class="lobby-votes-list"></ul>
+            </div>
           </div>
           <button type="button" id="btn-leave-session" class="btn-ghost hidden" data-i18n="leaveSession">Leave session</button>
         </div>
@@ -100,6 +104,19 @@
           </div>
           <button type="button" id="btn-save-preferences" class="btn-primary" data-i18n="savePrefs">Save preferences</button>
           <button type="button" id="btn-close-profile" class="btn-ghost" data-i18n="close">Close</button>
+        </div>
+      </div>
+
+      <div id="wheel-modal" class="modal hidden" role="dialog" aria-label="Spin the wheel">
+        <div class="modal-content wheel-modal-content">
+          <h3>Spin the wheel</h3>
+          <p id="wheel-status" class="modal-desc">Everyone selected — deciding fairly…</p>
+          <p id="wheel-reroll-counter" class="wheel-reroll-counter"></p>
+          <div id="wheel-result" class="wheel-result"></div>
+          <div id="wheel-actions" class="wheel-actions hidden">
+            <button type="button" id="wheel-reroll-btn" class="btn-ghost">Re-roll</button>
+            <button type="button" id="wheel-accept-btn" class="btn-primary">Accept result</button>
+          </div>
         </div>
       </div>
 
@@ -186,6 +203,11 @@
             <aside class="results-panel" aria-label="Restaurant recommendations">
               <h2 class="results-heading" data-i18n="topMatches">Top matches</h2>
               <p class="carousel-hint" data-i18n="carouselHint">Up to 5 picks — #1 is the best match. Swipe or use arrows.</p>
+
+              <div id="vote-summary-wrap" class="vote-summary-wrap hidden" aria-live="polite">
+                <p class="vote-summary-title" data-i18n="voteSummary">Who voted for what</p>
+                <ul id="vote-summary-list" class="vote-summary-list"></ul>
+              </div>
 
               <div id="carousel-empty" class="carousel-empty" data-i18n="carouselEmpty">
                 Answer a few questions — your top picks will appear here, best match first.

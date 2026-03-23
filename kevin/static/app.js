@@ -40,11 +40,53 @@ const liveSessionCodeEl = document.getElementById("live-session-code");
 const liveSessionCodeWrapEl = document.getElementById("live-session-code-wrap");
 const btnCopySessionCodeEl = document.getElementById("btn-copy-session-code");
 const btnLeaveSessionEl = document.getElementById("btn-leave-session");
+const wheelModalEl = document.getElementById("wheel-modal");
+const wheelStatusEl = document.getElementById("wheel-status");
+const wheelResultEl = document.getElementById("wheel-result");
+const wheelRerollCounterEl = document.getElementById("wheel-reroll-counter");
+const wheelActionsEl = document.getElementById("wheel-actions");
+const wheelRerollBtnEl = document.getElementById("wheel-reroll-btn");
+const wheelAcceptBtnEl = document.getElementById("wheel-accept-btn");
 
 let sessionId = null;
 let liveSessionCode = null;
+let liveSessionUid = null;
 let liveSessionPollTimer = null;
 let liveSessionLastHistoryLength = 0;
+
+function getLiveSessionUid() {
+  if (firebaseAuth?.currentUser) return firebaseAuth.currentUser.uid;
+  if (liveSessionUid) return liveSessionUid;
+  if (liveSessionCode) {
+    const stored = sessionStorage.getItem(`live-session-uid-${liveSessionCode}`);
+    if (stored) return (liveSessionUid = stored);
+  }
+  return null;
+}
+
+function setLiveSessionUid(uid) {
+  liveSessionUid = uid;
+  if (liveSessionCode && uid) sessionStorage.setItem(`live-session-uid-${liveSessionCode}`, uid);
+}
+
+let liveSessionDisplayName = null;
+function getLiveSessionDisplayName() {
+  if (liveSessionDisplayName) return liveSessionDisplayName;
+  if (liveSessionCode) {
+    const stored = sessionStorage.getItem(`live-session-name-${liveSessionCode}`);
+    if (stored) return (liveSessionDisplayName = stored);
+  }
+  return firebaseAuth?.currentUser?.displayName?.split(" ")[0] || "Guest";
+}
+function setLiveSessionDisplayName(name) {
+  liveSessionDisplayName = name;
+  if (liveSessionCode && name) sessionStorage.setItem(`live-session-name-${liveSessionCode}`, name);
+}
+
+function isLiveSessionHost() {
+  const uid = getLiveSessionUid();
+  return !!uid && !!liveSessionCreatorUid && uid === liveSessionCreatorUid;
+}
 let firebaseAuth = null;
 /** True when server has Firebase Admin + Firestore (can verify tokens and save). */
 let serverFirestoreEnabled = false;
@@ -54,6 +96,21 @@ let chatEnded = false;
 let lastRestaurantList = [];
 let lastVotesWithDetails = [];
 let selectedPlaceId = null;
+let lastCarouselSignature = null;
+let lastCarouselIndex = 0;
+const ANY_PLACE_ID = "__ANY__";
+// Cache photo references we have already seen (keyed by place_id) so multiuser polling
+// doesn't wipe out images if the server payload is missing photo refs.
+const restaurantPhotoRefsByPid = {};
+
+let groupWheelSpinning = false;
+let groupWheelWinnerPlaceId = null;
+let groupWheelMembersSnapshot = null;
+let groupWheelVotesSnapshot = null;
+let groupWheelPendingRestaurant = null;
+let groupWheelRerollCount = 0;
+const GROUP_WHEEL_MAX_REROLLS = 2;
+let liveSessionCreatorUid = null;
 
 function getClientTimezone() {
   try {
@@ -490,6 +547,13 @@ function setChatInputsEnabled(enabled) {
 
 function finalizeRestaurantChoice(r) {
   if (chatEnded) return;
+  if (liveSessionCode) {
+    selectedPlaceId = r.place_id || r.name || null;
+    voteForRestaurant(r.place_id || r.name || "");
+    addBubble(`Choice saved: ${r.name || "this place"}. Waiting for everyone to choose.`, "assistant");
+    renderRestaurants(lastRestaurantList, lastVotesWithDetails);
+    return;
+  }
   chatEnded = true;
   selectedPlaceId = r.place_id || r.name || null;
   clearQuickReplies();
@@ -498,13 +562,21 @@ function finalizeRestaurantChoice(r) {
   document.body.classList.add("chat-ended");
 
   const name = r.name || "this place";
-  addBubble(`I'll go with: ${name}`, "user");
+  addBubble(`I'll go with: ${name}`, "user", liveSessionCode ? getLiveSessionDisplayName() : undefined);
   addBubble(
     `Sounds good — enjoy ${name}. This chat is done. Use “Reset chat” if you want to pick again.`,
     "assistant"
   );
   recordVisitToCloud(r);
   renderRestaurants(lastRestaurantList);
+}
+
+function chooseWhateverIsGood() {
+  if (!liveSessionCode || chatEnded) return;
+  selectedPlaceId = ANY_PLACE_ID;
+  voteForRestaurant(ANY_PLACE_ID);
+  addBubble("Got it — you're flexible. Waiting for everyone to choose.", "assistant");
+  renderRestaurants(lastRestaurantList, lastVotesWithDetails);
 }
 
 async function sendChatMessage(message) {
@@ -518,23 +590,30 @@ async function sendChatMessage(message) {
 
   clearQuickReplies();
 
-  addBubble(trimmed, "user");
+  addBubble(trimmed, "user", liveSessionCode ? getLiveSessionDisplayName() : undefined);
   messageEl.value = "";
 
   try {
+    const chatPayload = {
+      session_id: sessionId,
+      live_session_code: liveSessionCode || undefined,
+      message: trimmed,
+      location: locationEl.value.trim(),
+      user_lat: userCoords ? userCoords.lat : null,
+      user_lng: userCoords ? userCoords.lng : null,
+      location_range_miles: locationRangeEl ? parseInt(locationRangeEl.value, 10) : 10,
+      client_timezone: getClientTimezone(),
+      client_lang: typeof getLang === "function" ? getLang() : "en",
+    };
+    if (liveSessionCode) {
+      chatPayload.display_name = getLiveSessionDisplayName();
+      const myUid = getLiveSessionUid();
+      if (myUid && !firebaseAuth?.currentUser) chatPayload.uid = myUid;
+    }
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: await authHeaders(),
-      body: JSON.stringify({
-        session_id: sessionId,
-        live_session_code: liveSessionCode || undefined,
-        message: trimmed,
-        location: locationEl.value.trim(),
-        user_lat: userCoords ? userCoords.lat : null,
-        user_lng: userCoords ? userCoords.lng : null,
-        location_range_miles: locationRangeEl ? parseInt(locationRangeEl.value, 10) : 10,
-        client_timezone: getClientTimezone(),
-      }),
+      body: JSON.stringify(chatPayload),
     });
 
     const data = await readJsonFromResponse(response);
@@ -562,6 +641,14 @@ async function sendChatMessage(message) {
 
 function resetChat() {
   chatEnded = false;
+  groupWheelSpinning = false;
+  groupWheelWinnerPlaceId = null;
+  groupWheelMembersSnapshot = null;
+  groupWheelVotesSnapshot = null;
+  groupWheelPendingRestaurant = null;
+  groupWheelRerollCount = 0;
+  liveSessionCreatorUid = null;
+  if (wheelModalEl) wheelModalEl.classList.add("hidden");
   selectedPlaceId = null;
   lastRestaurantList = [];
   setChatInputsEnabled(true);
@@ -589,6 +676,7 @@ function loadSpeechVoices(cb) {
   };
 }
 
+const LANG_TO_SPEECH = { en: "en-US", es: "es-ES", zh: "zh-CN", fr: "fr-FR", hi: "hi-IN" };
 function speakText(text) {
   if (!("speechSynthesis" in window)) return;
   window.speechSynthesis.cancel();
@@ -597,19 +685,28 @@ function speakText(text) {
     u.rate = 0.88;
     u.pitch = 1.02;
     u.volume = 1;
+    const lang = typeof getLang === "function" ? getLang() : "en";
+    const langCode = LANG_TO_SPEECH[lang] || lang;
+    u.lang = langCode;
     const voices = speechSynthesis.getVoices();
-    const pref = voices.find((v) => /Samantha|Karen|Daniel|Google US English/.test(v.name)) ||
-      voices.find((v) => v.name.includes("Female") && v.lang.startsWith("en")) ||
-      voices.find((v) => v.lang.startsWith("en-US"));
+    const pref = voices.find((v) => v.lang.startsWith(langCode.split("-")[0])) ||
+      voices.find((v) => v.lang.startsWith("en"));
     if (pref) u.voice = pref;
     window.speechSynthesis.speak(u);
   });
 }
 
-function addBubble(text, role) {
+function addBubble(text, role, authorDisplayName) {
   const div = document.createElement("div");
   div.className = `bubble ${role}`;
+  if (role === "user" && authorDisplayName) {
+    const label = document.createElement("span");
+    label.className = "bubble-author";
+    label.textContent = `${authorDisplayName}:`;
+    div.appendChild(label);
+  }
   const textSpan = document.createElement("span");
+  textSpan.className = "bubble-content";
   textSpan.textContent = text;
   div.appendChild(textSpan);
   if (role === "assistant" && text && "speechSynthesis" in window) {
@@ -671,6 +768,7 @@ function syncDotsWithScroll() {
   const n = slides.length;
   if (!n) return;
   const i = Math.round(carouselViewportEl.scrollLeft / w) % n;
+  lastCarouselIndex = i;
   const dots = carouselDotsEl.querySelectorAll(".carousel-dot");
   dots.forEach((d, idx) => d.setAttribute("aria-current", idx === i ? "true" : "false"));
 }
@@ -715,11 +813,56 @@ function wireInnerCarousel(viewport) {
   if (next) next.addEventListener("click", () => go(1));
 }
 
+function updateInnerPhotoSizes(viewport) {
+  const imgs = viewport.querySelectorAll("img[data-photo-ref]");
+  if (!imgs.length) return;
+  const w = viewport.clientWidth || viewport.getBoundingClientRect().width || 320;
+  const dpr = window.devicePixelRatio || 1;
+  const maxW = Math.min(1600, Math.max(320, Math.round(w * dpr * 1.4)));
+  imgs.forEach((img) => {
+    const ref = img.dataset.photoRef;
+    if (!ref) return;
+    img.src = `/api/place-photo?ref=${encodeURIComponent(ref)}&maxwidth=${maxW}`;
+  });
+}
+
 function renderRestaurants(restaurants, votesWithDetails) {
-  lastRestaurantList = Array.isArray(restaurants) ? restaurants : [];
-  if (Array.isArray(votesWithDetails)) lastVotesWithDetails = votesWithDetails;
+  const inputList = Array.isArray(restaurants) ? restaurants : [];
+
+  // Update photo cache from any restaurant objects that include photo refs.
+  inputList.forEach((r) => {
+    const pid = r?.place_id;
+    if (!pid) return;
+    const hasArr = Array.isArray(r.photo_references) && r.photo_references.length;
+    const hasOne = !!r.photo_reference;
+    if (hasArr || hasOne) {
+      restaurantPhotoRefsByPid[pid] = {
+        photo_reference: r.photo_reference,
+        photo_references: r.photo_references,
+      };
+    }
+  });
+
+  // Fill missing photo refs from cache before overwriting lastRestaurantList.
+  inputList.forEach((r) => {
+    const pid = r?.place_id;
+    if (!pid) return;
+    const hasArr = Array.isArray(r.photo_references) && r.photo_references.length;
+    const hasOne = !!r.photo_reference;
+    if (!hasArr && !hasOne && restaurantPhotoRefsByPid[pid]) {
+      r.photo_reference = restaurantPhotoRefsByPid[pid].photo_reference;
+      r.photo_references = restaurantPhotoRefsByPid[pid].photo_references;
+    }
+  });
+
+  lastRestaurantList = inputList;
+  if (Array.isArray(votesWithDetails)) {
+    lastVotesWithDetails = votesWithDetails;
+    updateVoteSummary(votesWithDetails);
+  }
   restaurantsEl.innerHTML = "";
   const sorted = sortByBestMatchFirst(lastRestaurantList);
+  const newSignature = sorted.map((r) => r.place_id || r.name || "").join("|");
 
   if (!sorted.length) {
     carouselEmptyEl.classList.remove("hidden");
@@ -764,7 +907,8 @@ function renderRestaurants(restaurants, votesWithDetails) {
         const img = document.createElement("img");
         img.alt = r.name || "Photo";
         img.loading = "lazy";
-        img.src = `/api/place-photo?ref=${encodeURIComponent(ref)}&maxwidth=1200`;
+        // Defer src/maxwidth until we know the rendered inner viewport width.
+        img.dataset.photoRef = ref;
         slide.appendChild(img);
         innerTrack.appendChild(slide);
       });
@@ -780,6 +924,7 @@ function renderRestaurants(restaurants, votesWithDetails) {
       card.appendChild(wrap);
       requestAnimationFrame(() => {
         sizeInnerSlides(innerVp);
+        updateInnerPhotoSizes(innerVp);
         wireInnerCarousel(innerVp);
       });
     }
@@ -892,7 +1037,7 @@ function renderRestaurants(restaurants, votesWithDetails) {
       selectBtn.disabled = true;
       selectBtn.classList.toggle("btn-select-restaurant--muted", !selected);
     } else {
-      selectBtn.textContent = typeof t === "function" ? t("chooseThis") : "Choose this place";
+      selectBtn.textContent = liveSessionCode ? "Select this place" : (typeof t === "function" ? t("chooseThis") : "Choose this place");
       selectBtn.disabled = false;
     }
     selectBtn.setAttribute(
@@ -901,13 +1046,24 @@ function renderRestaurants(restaurants, votesWithDetails) {
         ? selected
           ? "Your choice"
           : "Another option"
-        : `Choose ${r.name || "this restaurant"} and end chat`
+        : liveSessionCode
+          ? `Select ${r.name || "this restaurant"}`
+          : `Choose ${r.name || "this restaurant"} and end chat`
     );
     if (!chatEnded) {
       selectBtn.addEventListener("click", () => finalizeRestaurantChoice(r));
     }
 
     selectRow.appendChild(selectBtn);
+    if (liveSessionCode && !chatEnded) {
+      const anyBtn = document.createElement("button");
+      anyBtn.type = "button";
+      anyBtn.className = "btn-whatever";
+      anyBtn.textContent = "Whatever's good";
+      anyBtn.setAttribute("aria-label", "No strong preference");
+      anyBtn.addEventListener("click", chooseWhateverIsGood);
+      selectRow.appendChild(anyBtn);
+    }
     actionsRow.appendChild(selectRow);
 
     if (liveSessionCode && pid) {
@@ -942,7 +1098,25 @@ function renderRestaurants(restaurants, votesWithDetails) {
   });
 
   requestAnimationFrame(() => {
-    carouselViewportEl.scrollLeft = 0;
+    const w = carouselViewportEl.clientWidth;
+    if (w) {
+      let desiredIndex = 0;
+      // If the list order didn't change, keep whatever slide user was on.
+      if (newSignature === lastCarouselSignature) {
+        desiredIndex = Math.max(0, Math.min(sorted.length - 1, lastCarouselIndex));
+      }
+      // If the user has selected a place locally, prefer scrolling to it.
+      if (selectedPlaceId) {
+        const selectedIdx = sorted.findIndex((r) => {
+          const pid = r.place_id;
+          if (pid) return pid === selectedPlaceId;
+          return r.name === selectedPlaceId;
+        });
+        if (selectedIdx >= 0) desiredIndex = selectedIdx;
+      }
+      carouselViewportEl.scrollTo({ left: desiredIndex * w, behavior: "auto" });
+    }
+    lastCarouselSignature = newSignature;
     updateCarouselDots(sorted.length);
   });
 }
@@ -1072,15 +1246,32 @@ if ("geolocation" in navigator) {
 }
 
 async function voteForRestaurant(placeId) {
-  if (!liveSessionCode || !firebaseAuth?.currentUser) return;
+  if (!liveSessionCode) return;
+  const uid = getLiveSessionUid();
   try {
+    const body = { place_id: placeId };
+    if (uid && !firebaseAuth?.currentUser) body.uid = uid;
     const res = await fetch(`/api/live-session/${liveSessionCode}/vote`, {
       method: "POST",
       headers: await authHeaders(),
-      body: JSON.stringify({ place_id: placeId }),
+      body: JSON.stringify(body),
     });
-    if (res.ok) addBubble("Vote recorded!", "assistant");
-    else addBubble("Could not record vote.", "assistant");
+    if (res.ok) {
+      addBubble(typeof t === "function" ? t("voteRecorded") : "Vote recorded!", "assistant");
+      if (liveSessionPollTimer) {
+        fetch(`/api/live-session/${liveSessionCode}`)
+          .then((r) => r.ok && r.json())
+          .then((d) => {
+            if (d.restaurants?.length && d.votesWithDetails) {
+              renderRestaurants(d.restaurants, d.votesWithDetails);
+            }
+            if (d.members && d.votesWithDetails) {
+              applyLiveSessionDecisionState(d.members, d.votesWithDetails);
+            }
+          })
+          .catch(() => {});
+      }
+    } else addBubble("Could not record vote.", "assistant");
   } catch (e) {
     addBubble(`Vote failed: ${e.message}`, "assistant");
   }
@@ -1102,6 +1293,9 @@ async function updateLiveSessionRestaurants() {
           price_display: r.price_display,
           match_score: r.match_score,
           dish_highlight: r.dish_highlight,
+          // Preserve photo refs so the carousel still renders in multiuser mode.
+          photo_reference: r.photo_reference,
+          photo_references: r.photo_references,
         })),
       }),
     });
@@ -1110,9 +1304,173 @@ async function updateLiveSessionRestaurants() {
   }
 }
 
+function updateJoinUICollapsed(inSession) {
+  const joinRow = document.querySelector(".join-session-row");
+  const createBtn = btnCreateSessionEl;
+  if (joinRow) joinRow.classList.toggle("hidden", !!inSession);
+  if (createBtn) createBtn.classList.toggle("hidden", !!inSession);
+}
+
+function applyLiveSessionDecisionState(members, votesWithDetails) {
+  if (!liveSessionCode || !Array.isArray(members) || !members.length) return;
+  const memberUids = members.map((m) => (typeof m === "object" ? m.uid : m)).filter(Boolean);
+  if (!memberUids.length) return;
+
+  const votesList = Array.isArray(votesWithDetails) ? votesWithDetails : [];
+  const votedUids = new Set(votesList.map((v) => v.uid).filter(Boolean));
+  const everyoneDecided = memberUids.every((uid) => votedUids.has(uid));
+
+  if (!everyoneDecided || chatEnded || groupWheelSpinning) return;
+
+  // Lock chat + selection while we decide.
+  chatEnded = true;
+  setChatInputsEnabled(false);
+  document.body.classList.add("chat-ended");
+  addBubble("Everyone has selected. Spinning the wheel to decide fairly…", "assistant");
+
+  // If everyone chose the exact same specific place (no "__ANY__"), lock it immediately.
+  const placeIds = votesList.map((v) => v.place_id).filter(Boolean);
+  const uniquePlaceIds = new Set(placeIds);
+  if (uniquePlaceIds.size === 1 && !uniquePlaceIds.has(ANY_PLACE_ID)) {
+    const onlyPid = Array.from(uniquePlaceIds)[0];
+    const sortedRestaurants = sortByBestMatchFirst(lastRestaurantList);
+    const winner = sortedRestaurants.find((r) => r.place_id === onlyPid) || sortedRestaurants[0];
+    finalizeGroupDecisionWithRestaurant(winner);
+    return;
+  }
+
+  startGroupWheelSpin(members, votesList, groupWheelRerollCount);
+}
+
+function hashStringToUint32(str) {
+  // FNV-1a
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function mulberry32(seed) {
+  return function () {
+    let t = (seed += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function pickDeterministicWinnerPlaceId(members, votesList, rerollCount = 0) {
+  const sortedRestaurants = sortByBestMatchFirst(lastRestaurantList);
+  if (!sortedRestaurants.length) return null;
+
+  const memberUids = members.map((m) => (typeof m === "object" ? m.uid : m)).filter(Boolean).sort();
+  const votesByUid = {};
+  votesList.forEach((v) => {
+    if (v && v.uid) votesByUid[v.uid] = v.place_id;
+  });
+  const tickets = memberUids.map((uid) => votesByUid[uid]).filter(Boolean);
+  if (!tickets.length) return sortedRestaurants[0].place_id;
+
+  const seedStr = `${liveSessionCode}|${memberUids.join(",")}|${tickets.join(",")}|reroll:${rerollCount}`;
+  const rand = mulberry32(hashStringToUint32(seedStr));
+  const ticketIdx = Math.floor(rand() * tickets.length);
+  const ticketPlaceId = tickets[ticketIdx];
+
+  if (!ticketPlaceId || ticketPlaceId === ANY_PLACE_ID) {
+    const restaurantIdx = Math.floor(rand() * sortedRestaurants.length);
+    return sortedRestaurants[restaurantIdx]?.place_id || sortedRestaurants[0].place_id;
+  }
+  return ticketPlaceId;
+}
+
+function finalizeGroupDecisionWithRestaurant(r) {
+  if (!r) return;
+  groupWheelSpinning = false;
+  groupWheelWinnerPlaceId = r.place_id || r.name || null;
+  if (wheelModalEl) wheelModalEl.classList.add("hidden");
+
+  selectedPlaceId = r.place_id || r.name || null;
+  clearQuickReplies();
+  if (quickRepliesSectionEl) quickRepliesSectionEl.classList.add("hidden");
+
+  const name = r.name || "this place";
+  addBubble(`I'll go with: ${name}`, "user", liveSessionCode ? getLiveSessionDisplayName() : undefined);
+  addBubble(
+    `Sounds good — enjoy ${name}. This chat is done. Use “Reset chat” to start over.`,
+    "assistant"
+  );
+  recordVisitToCloud(r);
+  renderRestaurants(lastRestaurantList, lastVotesWithDetails);
+}
+
+function startGroupWheelSpin(members, votesList, rerollCount = 0) {
+  if (groupWheelSpinning || !wheelStatusEl || !wheelResultEl) return;
+  groupWheelSpinning = true;
+  groupWheelVotesSnapshot = votesList;
+  groupWheelMembersSnapshot = members;
+  groupWheelRerollCount = rerollCount;
+
+  if (wheelModalEl) wheelModalEl.classList.remove("hidden");
+  if (wheelActionsEl) wheelActionsEl.classList.add("hidden");
+  if (wheelRerollCounterEl) {
+    wheelRerollCounterEl.textContent = `Re-rolls: ${groupWheelRerollCount}/${GROUP_WHEEL_MAX_REROLLS}`;
+  }
+
+  const sortedRestaurants = sortByBestMatchFirst(lastRestaurantList);
+  const candidateNames = sortedRestaurants.map((r) => r.name || "Restaurant").filter(Boolean);
+  const winnerPlaceId = pickDeterministicWinnerPlaceId(members, votesList, rerollCount);
+  const winnerRestaurant =
+    sortedRestaurants.find((r) => r.place_id === winnerPlaceId) || sortedRestaurants[0];
+
+  // Deterministic animation (winner is fixed; animation is just visual).
+  const memberUids = members.map((m) => (typeof m === "object" ? m.uid : m)).filter(Boolean).sort();
+  const placeIds = votesList.map((v) => v.place_id).filter(Boolean);
+  const seedStr = `${liveSessionCode}|${memberUids.join(",")}|${placeIds.join(",")}|wheel-anim|reroll:${rerollCount}`;
+  const randAnim = mulberry32(hashStringToUint32(seedStr));
+
+  const spinSteps = 20;
+  const intervalMs = 110;
+  let step = 0;
+  const timer = setInterval(() => {
+    const idx = candidateNames.length ? Math.floor(randAnim() * candidateNames.length) : 0;
+    const name = candidateNames[idx] || "Restaurant";
+    wheelResultEl.textContent = name;
+    wheelStatusEl.textContent = "Spinning…";
+    step += 1;
+    if (step >= spinSteps) {
+      clearInterval(timer);
+      wheelStatusEl.textContent = "Done!";
+      const finalName = winnerRestaurant?.name || "Restaurant";
+      wheelResultEl.textContent = finalName;
+      groupWheelSpinning = false;
+      groupWheelPendingRestaurant = winnerRestaurant;
+      if (isLiveSessionHost()) {
+        wheelStatusEl.textContent = "Host: accept result or re-roll.";
+        if (wheelActionsEl) wheelActionsEl.classList.remove("hidden");
+        if (wheelRerollBtnEl) wheelRerollBtnEl.disabled = groupWheelRerollCount >= GROUP_WHEEL_MAX_REROLLS;
+      } else {
+        wheelStatusEl.textContent = "Waiting for host to accept or re-roll…";
+      }
+    }
+  }, intervalMs);
+}
+
 function leaveLiveSession() {
+  if (liveSessionCode) {
+    sessionStorage.removeItem(`live-session-uid-${liveSessionCode}`);
+    sessionStorage.removeItem(`live-session-name-${liveSessionCode}`);
+  }
   liveSessionCode = null;
+  liveSessionUid = null;
+  liveSessionDisplayName = null;
+  liveSessionCreatorUid = null;
   liveSessionLastHistoryLength = 0;
+  groupWheelRerollCount = 0;
+  groupWheelPendingRestaurant = null;
+  if (wheelModalEl) wheelModalEl.classList.add("hidden");
+  updateJoinUICollapsed(false);
   if (liveSessionPollTimer) {
     clearInterval(liveSessionPollTimer);
     liveSessionPollTimer = null;
@@ -1130,14 +1488,19 @@ function syncChatFromLiveSession(history) {
   const bubbles = chatEl.querySelectorAll(".bubble");
   for (let i = bubbles.length; i < history.length; i++) {
     const msg = history[i];
-    if (msg && msg.role && msg.content) addBubble(msg.content, msg.role);
+    if (msg && msg.role && msg.content) {
+      const author = msg.role === "user" ? (msg.authorDisplayName || msg.displayName) : undefined;
+      addBubble(msg.content, msg.role, author);
+    }
   }
   liveSessionLastHistoryLength = history.length;
 }
 
-function updateLobbyMembers(members) {
+function updateLobbyMembers(members, votesWithDetails) {
   const listEl = document.getElementById("lobby-members-list");
   const lobbyEl = document.getElementById("live-session-lobby");
+  const votesWrap = document.getElementById("lobby-votes-wrap");
+  const votesList = document.getElementById("lobby-votes-list");
   if (!listEl || !lobbyEl) return;
   if (!members || !members.length) {
     lobbyEl.classList.add("hidden");
@@ -1147,7 +1510,47 @@ function updateLobbyMembers(members) {
   listEl.innerHTML = "";
   members.forEach((m) => {
     const li = document.createElement("li");
+    li.className = "lobby-member-item";
     li.textContent = typeof m === "object" ? (m.displayName || m.uid || "?") : m;
+    listEl.appendChild(li);
+  });
+  if (votesWrap && votesList && Array.isArray(votesWithDetails) && votesWithDetails.length) {
+    votesWrap.classList.remove("hidden");
+    votesList.innerHTML = "";
+    votesWithDetails.forEach((v) => {
+      const li = document.createElement("li");
+      li.className = "lobby-vote-item";
+      const name = v.displayName || "?";
+      const place = v.place_name || "restaurant";
+      const match = v.match_score != null ? ` (${v.match_score}%)` : "";
+      li.textContent = `${name} → ${place}${match}`;
+      votesList.appendChild(li);
+    });
+  } else if (votesWrap) {
+    votesWrap.classList.add("hidden");
+    if (votesList) votesList.innerHTML = "";
+  }
+}
+
+function updateVoteSummary(votesWithDetails) {
+  const wrap = document.getElementById("vote-summary-wrap");
+  const listEl = document.getElementById("vote-summary-list");
+  if (!wrap || !listEl) return;
+  if (!liveSessionCode || !Array.isArray(votesWithDetails) || !votesWithDetails.length) {
+    wrap.classList.add("hidden");
+    return;
+  }
+  wrap.classList.remove("hidden");
+  listEl.innerHTML = "";
+  const titleEl = wrap.querySelector(".vote-summary-title");
+  if (titleEl) titleEl.textContent = typeof t === "function" ? t("voteSummary") : "Who voted for what";
+  votesWithDetails.forEach((v) => {
+    const li = document.createElement("li");
+    li.className = "vote-summary-item";
+    const name = v.displayName || "?";
+    const place = v.place_name || "restaurant";
+    const match = v.match_score != null ? ` (${v.match_score}%)` : "";
+    li.textContent = `${name} → ${place}${match}`;
     listEl.appendChild(li);
   });
 }
@@ -1160,12 +1563,16 @@ function startLiveSessionPoll() {
       const res = await fetch(`/api/live-session/${liveSessionCode}`);
       if (!res.ok) return;
       const data = await res.json();
+      if (data.creatorUid) liveSessionCreatorUid = data.creatorUid;
       if (data.chatState?.history) syncChatFromLiveSession(data.chatState.history);
-      if (data.members) updateLobbyMembers(data.members);
+      if (data.members) updateLobbyMembers(data.members, data.votesWithDetails);
       if (data.restaurants?.length) {
         const hadNone = !lastRestaurantList.length;
         renderRestaurants(data.restaurants, data.votesWithDetails);
         if (hadNone && data.restaurants.length) lastRestaurantList = data.restaurants;
+      }
+      if (data.members && data.votesWithDetails) {
+        applyLiveSessionDecisionState(data.members, data.votesWithDetails);
       }
     } catch {
       /* ignore */
@@ -1184,7 +1591,8 @@ if (btnMicEl) {
       recognition = new SR();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = "en-US";
+      const lang = typeof getLang === "function" ? getLang() : "en";
+      recognition.lang = LANG_TO_SPEECH[lang] || "en-US";
       recognition.maxAlternatives = 3;
 
       recognition.onresult = (e) => {
@@ -1214,7 +1622,13 @@ if (btnMicEl) {
         } else if (e.error === "no-speech") {
           addBubble("No speech detected. Try again?", "assistant");
         } else if (e.error !== "aborted") {
-          addBubble("Voice input error. Try Chrome or Edge if it keeps failing.", "assistant");
+          const isOpera = /OPR|Opera/i.test(navigator.userAgent);
+          addBubble(
+            isOpera
+              ? "Voice input doesn't work well in Opera. Try Chrome or Edge for the best experience."
+              : "Voice input error. Try Chrome or Edge if it keeps failing.",
+            "assistant"
+          );
         }
       };
 
@@ -1228,7 +1642,13 @@ if (btnMicEl) {
 
   btnMicEl.addEventListener("click", async () => {
     if (!recognition) {
-      addBubble("Voice input isn't supported in this browser. Try Chrome or Edge.", "assistant");
+      const isOpera = /OPR|Opera/i.test(navigator.userAgent);
+      addBubble(
+        isOpera
+          ? "Voice input isn't supported in Opera. Use Chrome or Edge for voice features."
+          : "Voice input isn't supported in this browser. Try Chrome or Edge.",
+        "assistant"
+      );
       return;
     }
     if (btnMicEl.classList.contains("recording")) {
@@ -1240,6 +1660,8 @@ if (btnMicEl) {
     } catch (_) {}
     committedTranscript = messageEl ? messageEl.value : "";
     interimTranscript = "";
+    const micLang = typeof getLang === "function" ? getLang() : "en";
+    recognition.lang = LANG_TO_SPEECH[micLang] || "en-US";
     btnMicEl.classList.add("recording");
     try {
       if (navigator.mediaDevices?.getUserMedia) {
@@ -1265,7 +1687,13 @@ if (btnMicEl) {
       if (err.name === "NotAllowedError" || err.name === "InvalidStateError") {
         addBubble("Microphone access was denied. Check your browser permissions.", "assistant");
       } else {
-        addBubble("Couldn't start voice input. Try again.", "assistant");
+        const isOpera = /OPR|Opera/i.test(navigator.userAgent);
+        addBubble(
+          isOpera
+            ? "Voice input doesn't work in Opera. Try Chrome or Edge."
+            : "Couldn't start voice input. Try again.",
+          "assistant"
+        );
       }
     }
   });
@@ -1328,14 +1756,14 @@ if (btnSavePreferencesEl) {
 }
 
 let _lobbyModalPending = null;
-function showLobbyModal(onConfirm) {
+function showLobbyModal(onConfirm, defaultName) {
   const modal = document.getElementById("lobby-modal");
   const input = document.getElementById("lobby-name-input");
   const confirmBtn = document.getElementById("lobby-modal-confirm");
   const cancelBtn = document.getElementById("lobby-modal-cancel");
   if (!modal || !input || !confirmBtn || !cancelBtn) return;
   _lobbyModalPending = onConfirm;
-  input.value = firebaseAuth?.currentUser?.displayName?.split(" ")[0] || "";
+  input.value = defaultName ?? firebaseAuth?.currentUser?.displayName?.split(" ")[0] ?? "";
   modal.classList.remove("hidden");
   input.focus();
 }
@@ -1346,17 +1774,26 @@ function hideLobbyModal() {
 }
 
 if (btnCreateSessionEl) {
-  btnCreateSessionEl.addEventListener("click", async () => {
-    try {
-      const initialHistory = [];
+  btnCreateSessionEl.addEventListener("click", () => {
+    showLobbyModal(async (displayName) => {
+      try {
+        const initialHistory = [];
       if (chatEl) {
         chatEl.querySelectorAll(".bubble").forEach((b) => {
           const role = b.classList.contains("user") ? "user" : "assistant";
-          const text = b.querySelector("span")?.textContent?.trim();
-          if (text) initialHistory.push({ role, content: text });
+          const contentEl = b.querySelector(".bubble-content") || b.querySelector("span");
+          const text = contentEl?.textContent?.trim();
+          if (text) {
+            const entry = { role, content: text };
+            if (role === "user") {
+              const authorEl = b.querySelector(".bubble-author");
+              if (authorEl) entry.authorDisplayName = authorEl.textContent.replace(/:$/, "");
+              else entry.authorDisplayName = displayName;
+            }
+            initialHistory.push(entry);
+          }
         });
       }
-      const displayName = firebaseAuth?.currentUser?.displayName?.split(" ")[0] || "Host";
       const res = await fetch("/api/live-session", {
         method: "POST",
         headers: await authHeaders(),
@@ -1387,10 +1824,13 @@ if (btnCreateSessionEl) {
       if (data.code) {
         liveSessionCode = data.code;
         sessionId = data.code;
+        if (data.uid) setLiveSessionUid(data.uid);
+        setLiveSessionDisplayName(displayName);
         liveSessionLastHistoryLength = chatEl ? chatEl.querySelectorAll(".bubble").length : 0;
         if (liveSessionCodeEl) liveSessionCodeEl.value = data.code;
         if (liveSessionCodeWrapEl) liveSessionCodeWrapEl.classList.remove("hidden");
         if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
+        updateJoinUICollapsed(true);
         addBubble(`Session created! Code: ${data.code} — copy it from the input below or the sidebar.`, "assistant");
         if (messageEl) {
           messageEl.value = data.code;
@@ -1402,7 +1842,11 @@ if (btnCreateSessionEl) {
           const sessRes = await fetch(`/api/live-session/${data.code}`);
           if (sessRes.ok) {
             const sess = await sessRes.json();
-            if (sess.members) updateLobbyMembers(sess.members);
+          if (sess.creatorUid) liveSessionCreatorUid = sess.creatorUid;
+            if (sess.members) updateLobbyMembers(sess.members, sess.votesWithDetails);
+            if (sess.members && sess.votesWithDetails) {
+              applyLiveSessionDecisionState(sess.members, sess.votesWithDetails);
+            }
           }
         } catch (_) { /* ignore */ }
       } else {
@@ -1411,54 +1855,77 @@ if (btnCreateSessionEl) {
     } catch (e) {
       addBubble(`Create failed: ${e.message}`, "assistant");
     }
+    }, firebaseAuth?.currentUser?.displayName?.split(" ")[0] || "Host");
   });
 }
 
 if (btnJoinSessionEl && sessionCodeInputEl) {
-  btnJoinSessionEl.addEventListener("click", async () => {
+  btnJoinSessionEl.addEventListener("click", () => {
     const code = sessionCodeInputEl.value.trim().toUpperCase();
     if (!code) {
       addBubble("Enter a session code.", "assistant");
       return;
     }
+    if (liveSessionCode === code) {
+      addBubble(typeof t === "function" ? t("alreadyInSession") : "You're already in this session.", "assistant");
+      return;
+    }
     showLobbyModal(async (displayName) => {
-      try {
-        const res = await fetch(`/api/live-session/${code}/join`, {
-          method: "POST",
-          headers: await authHeaders(),
-          body: JSON.stringify({ display_name: displayName }),
-        });
-        if (res.ok) {
-          liveSessionCode = code;
-          sessionId = code;
-          if (liveSessionCodeEl) liveSessionCodeEl.value = code;
-          if (liveSessionCodeWrapEl) liveSessionCodeWrapEl.classList.remove("hidden");
-          if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
-          addBubble("Joined session!", "assistant");
-          startLiveSessionPoll();
-          const sessRes = await fetch(`/api/live-session/${code}`);
-          if (sessRes.ok) {
-            const sess = await sessRes.json();
-            if (sess.restaurants?.length) {
-              renderRestaurants(sess.restaurants);
-              lastRestaurantList = sess.restaurants;
-            }
-            if (sess.members) updateLobbyMembers(sess.members);
-            if (sess.chatState?.history?.length) {
-              chatEl.innerHTML = "";
-              sess.chatState.history.forEach((msg) => addBubble(msg.content, msg.role));
-              liveSessionLastHistoryLength = sess.chatState.history.length;
-            } else {
-              liveSessionLastHistoryLength = chatEl.querySelectorAll(".bubble").length;
-            }
+    const body = { display_name: displayName };
+    const storedUid = sessionStorage.getItem(`live-session-uid-${code}`);
+    if (storedUid && storedUid.startsWith("anon-") && !firebaseAuth?.currentUser) {
+      body.uid = storedUid;
+    }
+    try {
+      const res = await fetch(`/api/live-session/${code}/join`, {
+        method: "POST",
+        headers: await authHeaders(),
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+      if (res.ok && data.ok !== false) {
+        liveSessionCode = code;
+        sessionId = code;
+        if (data.uid) setLiveSessionUid(data.uid);
+        setLiveSessionDisplayName(displayName);
+        if (liveSessionCodeEl) liveSessionCodeEl.value = code;
+        if (liveSessionCodeWrapEl) liveSessionCodeWrapEl.classList.remove("hidden");
+        if (btnLeaveSessionEl) btnLeaveSessionEl.classList.remove("hidden");
+        updateJoinUICollapsed(true);
+        addBubble("Joined session!", "assistant");
+        startLiveSessionPoll();
+        const sessRes = await fetch(`/api/live-session/${code}`);
+        if (sessRes.ok) {
+          const sess = await sessRes.json();
+          if (sess.creatorUid) liveSessionCreatorUid = sess.creatorUid;
+          if (sess.restaurants?.length) {
+            renderRestaurants(sess.restaurants, sess.votesWithDetails);
+            lastRestaurantList = sess.restaurants;
           }
-        } else {
-          addBubble("Session not found.", "assistant");
+          if (sess.members) updateLobbyMembers(sess.members, sess.votesWithDetails);
+          if (sess.members && sess.votesWithDetails) {
+            applyLiveSessionDecisionState(sess.members, sess.votesWithDetails);
+          }
+          if (sess.chatState?.history?.length) {
+            chatEl.innerHTML = "";
+            sess.chatState.history.forEach((msg) => {
+              const author = msg.role === "user" ? (msg.authorDisplayName || msg.displayName) : undefined;
+              addBubble(msg.content, msg.role, author);
+            });
+            liveSessionLastHistoryLength = sess.chatState.history.length;
+          } else {
+            liveSessionLastHistoryLength = chatEl.querySelectorAll(".bubble").length;
+          }
         }
-      } catch (e) {
-        addBubble(`Join failed: ${e.message}`, "assistant");
+      } else {
+        addBubble(data.error || "Session not found. Check the code and try again.", "assistant");
       }
-    });
+    } catch (e) {
+      addBubble(`Join failed: ${e.message}`, "assistant");
+    }
+    }, firebaseAuth?.currentUser?.displayName?.split(" ")[0] || "Guest");
   });
 }
 
@@ -1487,11 +1954,28 @@ if (lobbyModalConfirmEl && lobbyModalCancelEl && lobbyNameInputEl) {
   lobbyModalConfirmEl.addEventListener("click", () => {
     if (typeof _lobbyModalPending === "function") {
       const name = lobbyNameInputEl.value.trim() || "Guest";
+      const onConfirm = _lobbyModalPending;
       hideLobbyModal();
-      _lobbyModalPending(name);
+      onConfirm(name);
     }
   });
   lobbyModalCancelEl.addEventListener("click", hideLobbyModal);
+}
+
+if (wheelAcceptBtnEl) {
+  wheelAcceptBtnEl.addEventListener("click", () => {
+    if (!isLiveSessionHost() || !groupWheelPendingRestaurant) return;
+    finalizeGroupDecisionWithRestaurant(groupWheelPendingRestaurant);
+  });
+}
+
+if (wheelRerollBtnEl) {
+  wheelRerollBtnEl.addEventListener("click", () => {
+    if (!isLiveSessionHost()) return;
+    if (groupWheelRerollCount >= GROUP_WHEEL_MAX_REROLLS) return;
+    if (!groupWheelMembersSnapshot || !groupWheelVotesSnapshot) return;
+    startGroupWheelSpin(groupWheelMembersSnapshot, groupWheelVotesSnapshot, groupWheelRerollCount + 1);
+  });
 }
 
 initFirebaseClient();

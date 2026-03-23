@@ -293,6 +293,8 @@ def _empty_chat_state() -> Dict[str, Any]:
         "recommendations_started": False,
         "last_place_ids": [],
         "last_place_names": [],
+        "preferences": {},
+        "preferences_by_user": {},
     }
 
 
